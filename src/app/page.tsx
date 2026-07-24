@@ -199,15 +199,44 @@ function MealRecorder({ addLog }: { addLog: (msg: string) => void }) {
   const [analyzing, setAnalyzing] = useState(false);
   const [result, setResult] = useState<typeof MOCK_FOODS | null>(null);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const handleImageUpload = async () => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Show local preview immediately
+    const blobUrl = URL.createObjectURL(file);
+    setPreviewUrl(blobUrl);
+
     setAnalyzing(true); setResult(null);
-    addLog("[Upload] 正在识别图片...");
-    await new Promise(r => setTimeout(r, 1200));
-    setResult(MOCK_FOODS);
-    MOCK_FOODS.forEach(rec => addLog(`  ${rec.food} — ${rec.calories} kcal (P${rec.protein_g}/F${rec.fat_g}/C${rec.carbs_g})`));
-    addLog("[AI] 识别到 3 种食物");
+    addLog(`[Upload] 正在识别: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`);
+
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("meal_type", mealType);
+
+      const res = await fetch(`${API}/api/v1/meals/analyze-image`, {
+        method: "POST",
+        body: fd,
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setResult(data.records || []);
+        addLog(`[AI] 识别到 ${data.count} 种食物`);
+        data.records?.forEach((rec: any) => {
+          addLog(`  ${rec.food} — ${rec.calories} kcal (P${rec.protein_g}/F${rec.fat_g}/C${rec.carbs_g})`);
+        });
+      } else {
+        const err = await res.text();
+        addLog(`[Error] ${err.slice(0, 100)}`);
+      }
+    } catch (err: any) {
+      addLog(`[Error] ${err.message}`);
+    }
     setAnalyzing(false);
   };
 
@@ -232,9 +261,12 @@ function MealRecorder({ addLog }: { addLog: (msg: string) => void }) {
           <button className={`tab ${mode === "text" ? "active" : ""}`} onClick={() => setMode("text")}>文字输入</button>
         </div>
       </div>
+      {previewUrl && (<div className="card"><div className="card-title">图片预览</div>
+        <img src={previewUrl} alt="food preview" className="preview-thumb" />
+      </div>)}
       {mode === "image" && (<div className="card"><div className="card-title">上传食物照片</div><div className="upload-area">
         <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleImageUpload} />
-        <button className="upload-btn" onClick={() => { fileRef.current?.click(); handleImageUpload(); }} disabled={analyzing}>
+        <button className="upload-btn" onClick={() => fileRef.current?.click()} disabled={analyzing}>
           {analyzing ? <span className="spinner" /> : <><Upload className="h-4 w-4" /> 拍照或选择图片</>}
         </button>
       </div></div>)}
