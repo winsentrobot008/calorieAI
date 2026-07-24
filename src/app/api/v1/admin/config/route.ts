@@ -1,0 +1,18 @@
+import { NextRequest, NextResponse } from "next/server";
+
+const configStore: Record<string, string> = {
+  ai_provider: "gpt-4o",
+  max_recognitions_per_day: "10",
+};
+
+export async function GET() {
+  return NextResponse.json({ config: configStore });
+}
+
+export async function POST(request: NextRequest) {
+  const { searchParams } = new URL(request.url);
+  const key = searchParams.get("key");
+  const value = searchParams.get("value");
+  if (key) configStore[key] = value || "";
+  return NextResponse.json({ status: "ok", config: configStore });
+}
