@@ -7,7 +7,15 @@ const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
  *
  * 创建 Stripe Checkout Session，重定向用户至 Stripe 支付页面。
  *
- * 请求体: { plan: "monthly" | "yearly" | "permanent", success_url?: string, cancel_url?: string }
+ * 请求体:
+ * {
+ *   plan: "monthly" | "yearly" | "permanent",
+ *   payment_method?: "card" | "alipay" | "wechat_pay" | "all",  // 默认 "all"
+ *   user_id?: string,       // 用户 ID (关联订阅)
+ *   email?: string,         // 用户邮箱 (关联订阅)
+ *   success_url?: string,
+ *   cancel_url?: string
+ * }
  * 响应: { sessionId: string, url: string }
  */
 export async function POST(request: NextRequest) {
@@ -30,7 +38,7 @@ export async function POST(request: NextRequest) {
     });
 
     const body = await request.json();
-    const { plan, success_url, cancel_url } = body;
+    const { plan, payment_method = "all", success_url, cancel_url, user_id, email } = body;
 
     const origin = request.headers.get("origin") || "http://localhost:3000";
 
@@ -60,8 +68,22 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `未知方案: ${plan}` }, { status: 400 });
     }
 
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
+    // ── 确定支持的支付方式 ──────────────────────────────
+    // 支持: 国际信用卡 + 支付宝 + 微信支付
+    const paymentMethodTypes: string[] =
+      payment_method === "all"
+        ? ["card", "alipay", "wechat_pay"]
+        : payment_method === "card"
+          ? ["card"]
+          : payment_method === "alipay"
+            ? ["alipay"]
+            : payment_method === "wechat_pay"
+              ? ["wechat_pay"]
+              : ["card", "alipay", "wechat_pay"];
+
+    // ── 构建 Checkout Session ──────────────────────────
+    const sessionParams: any = {
+      payment_method_types: paymentMethodTypes,
       line_items: [
         {
           price_data: {
@@ -81,12 +103,39 @@ export async function POST(request: NextRequest) {
       mode: plan === "permanent" ? "payment" : "subscription",
       success_url: success_url || `${origin}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: cancel_url || `${origin}/billing/cancel`,
-      metadata: config.metadata,
-    });
+      metadata: {
+        ...config.metadata,
+        ...(user_id ? { user_id } : {}),
+        ...(email ? { email } : {}),
+      },
+      ...(email ? { customer_email: email } : {}),
+    };
+
+    // ── 支付宝/微信支付使用 payment_intent_data 设置描述 ──
+    if (plan === "permanent") {
+      sessionParams.payment_intent_data = {
+        metadata: {
+          ...config.metadata,
+          ...(user_id ? { user_id } : {}),
+          ...(email ? { email } : {}),
+        },
+      };
+    } else {
+      sessionParams.subscription_data = {
+        metadata: {
+          ...config.metadata,
+          ...(user_id ? { user_id } : {}),
+          ...(email ? { email } : {}),
+        },
+      };
+    }
+
+    const session = await stripe.checkout.sessions.create(sessionParams);
 
     return NextResponse.json({
       sessionId: session.id,
       url: session.url,
+      payment_methods: paymentMethodTypes,
     });
   } catch (error: any) {
     console.error("[Stripe Checkout Error]", error);

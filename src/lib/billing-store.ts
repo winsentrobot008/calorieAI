@@ -1,0 +1,213 @@
+/**
+ * billing-store — 服务端账单状态存储
+ *
+ * 使用 JSON 文件持久化存储用户订阅状态。
+ * 生产环境建议替换为数据库（PostgreSQL / MongoDB 等）。
+ */
+
+import fs from "fs";
+import path from "path";
+
+// ─── Types ────────────────────────────────────────────────────────────
+
+export interface SubscriptionRecord {
+  /** 用户唯一标识 */
+  user_id: string;
+  /** 用户邮箱 */
+  email: string;
+  /** 方案类型: "subscription" | "license" */
+  plan_type: "subscription" | "license";
+  /** 方案标识: "monthly" | "yearly" | "permanent" */
+  plan: "monthly" | "yearly" | "permanent";
+  /** 订阅是否处于活跃状态 */
+  is_active: boolean;
+  /** 是否永久买断 */
+  is_permanent: boolean;
+  /** Stripe / PayPal 客户 ID */
+  stripe_customer_id?: string;
+  /** Stripe Subscription ID (订阅方案) */
+  stripe_subscription_id?: string;
+  /** Stripe Session / PaymentIntent ID */
+  stripe_session_id?: string;
+  /** PayPal Order ID */
+  paypal_order_id?: string;
+  /** 支付渠道: "stripe" | "paypal" */
+  provider: "stripe" | "paypal";
+  /** 当前周期开始时间 */
+  current_period_start: string;
+  /** 当前周期结束时间 (永久买断设为 2099-12-31) */
+  current_period_end: string;
+  /** 创建时间 */
+  created_at: string;
+  /** 最后更新时间 */
+  updated_at: string;
+}
+
+interface BillingStoreData {
+  subscriptions: Record<string, SubscriptionRecord>;
+}
+
+// ─── File Path ────────────────────────────────────────────────────────
+
+const DATA_DIR = path.join(process.cwd(), "data");
+const DATA_FILE = path.join(DATA_DIR, "subscriptions.json");
+
+// ─── Helpers ──────────────────────────────────────────────────────────
+
+function ensureDataDir(): void {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+}
+
+function readStore(): BillingStoreData {
+  ensureDataDir();
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      const raw = fs.readFileSync(DATA_FILE, "utf-8");
+      return JSON.parse(raw);
+    }
+  } catch (err) {
+    console.error("[BillingStore] Error reading store:", err);
+  }
+  return { subscriptions: {} };
+}
+
+function writeStore(data: BillingStoreData): void {
+  ensureDataDir();
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), "utf-8");
+  } catch (err) {
+    console.error("[BillingStore] Error writing store:", err);
+  }
+}
+
+// ─── Public API ───────────────────────────────────────────────────────
+
+/**
+ * 根据 user_id 获取订阅记录
+ */
+export function getSubscription(userId: string): SubscriptionRecord | null {
+  const store = readStore();
+  return store.subscriptions[userId] || null;
+}
+
+/**
+ * 根据 email 获取订阅记录
+ */
+export function getSubscriptionByEmail(email: string): SubscriptionRecord | null {
+  const store = readStore();
+  for (const sub of Object.values(store.subscriptions)) {
+    if (sub.email === email) {
+      return sub;
+    }
+  }
+  return null;
+}
+
+/**
+ * 根据 Stripe Customer ID 获取订阅记录
+ */
+export function getSubscriptionByStripeCustomerId(customerId: string): SubscriptionRecord | null {
+  const store = readStore();
+  for (const sub of Object.values(store.subscriptions)) {
+    if (sub.stripe_customer_id === customerId) {
+      return sub;
+    }
+  }
+  return null;
+}
+
+/**
+ * 根据 Stripe Subscription ID 获取订阅记录
+ */
+export function getSubscriptionByStripeSubscriptionId(subscriptionId: string): SubscriptionRecord | null {
+  const store = readStore();
+  for (const sub of Object.values(store.subscriptions)) {
+    if (sub.stripe_subscription_id === subscriptionId) {
+      return sub;
+    }
+  }
+  return null;
+}
+
+/**
+ * 创建或更新订阅记录
+ */
+export function upsertSubscription(
+  userId: string,
+  data: Partial<SubscriptionRecord>,
+): SubscriptionRecord {
+  const store = readStore();
+  const existing = store.subscriptions[userId];
+
+  const now = new Date().toISOString();
+
+  const record: SubscriptionRecord = {
+    user_id: userId,
+    email: data.email || existing?.email || "",
+    plan_type: data.plan_type || existing?.plan_type || "subscription",
+    plan: data.plan || existing?.plan || "monthly",
+    is_active: data.is_active ?? existing?.is_active ?? true,
+    is_permanent: data.is_permanent ?? existing?.is_permanent ?? false,
+    stripe_customer_id: data.stripe_customer_id || existing?.stripe_customer_id,
+    stripe_subscription_id: data.stripe_subscription_id || existing?.stripe_subscription_id,
+    stripe_session_id: data.stripe_session_id || existing?.stripe_session_id,
+    paypal_order_id: data.paypal_order_id || existing?.paypal_order_id,
+    provider: data.provider || existing?.provider || "stripe",
+    current_period_start: data.current_period_start || existing?.current_period_start || now,
+    current_period_end: data.current_period_end || existing?.current_period_end || now,
+    created_at: existing?.created_at || now,
+    updated_at: now,
+  };
+
+  store.subscriptions[userId] = record;
+  writeStore(store);
+  return record;
+}
+
+/**
+ * 停用订阅 (取消/过期)
+ */
+export function deactivateSubscription(userId: string): SubscriptionRecord | null {
+  const store = readStore();
+  const existing = store.subscriptions[userId];
+  if (!existing) return null;
+
+  existing.is_active = false;
+  existing.updated_at = new Date().toISOString();
+  writeStore(store);
+  return existing;
+}
+
+/**
+ * 获取所有活跃订阅数（统计用）
+ */
+export function getActiveSubscriptionCount(): number {
+  const store = readStore();
+  let count = 0;
+  for (const sub of Object.values(store.subscriptions)) {
+    if (sub.is_active) count++;
+  }
+  return count;
+}
+
+/**
+ * 获取所有永久买断数（统计用）
+ */
+export function getPermanentLicenseCount(): number {
+  const store = readStore();
+  let count = 0;
+  for (const sub of Object.values(store.subscriptions)) {
+    if (sub.is_active && sub.is_permanent) count++;
+  }
+  return count;
+}
+
+/**
+ * 获取所有用户列表（管理后台用）
+ */
+export function getAllSubscriptions(): SubscriptionRecord[] {
+  const store = readStore();
+  return Object.values(store.subscriptions);
+}

@@ -420,11 +420,28 @@ function LoginModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: st
   );
 }
 
-// ─── Billing Modal — Dual Channel (Stripe 主 + PayPal 辅) ─────────────
+// ─── Billing Modal — Multi-Channel (Stripe 主 + PayPal 辅) ────────────
+// 支持的支付方式: 国际信用卡 / 支付宝 / 微信支付 / PayPal
+type PaymentMethodType = "card" | "alipay" | "wechat_pay" | "paypal";
+
+const PAYMENT_METHODS: {
+  id: PaymentMethodType;
+  label: string;
+  labelEn: string;
+  icon: string;
+  description: string;
+  provider: "stripe" | "paypal";
+}[] = [
+  { id: "card",       label: "信用卡 / 借记卡", labelEn: "Credit / Debit Card", icon: "💳", description: "Visa · Mastercard · American Express · JCB · UnionPay", provider: "stripe" },
+  { id: "alipay",     label: "支付宝",           labelEn: "Alipay",              icon: "🔵", description: "Alipay · 支付宝", provider: "stripe" },
+  { id: "wechat_pay", label: "微信支付",         labelEn: "WeChat Pay",          icon: "🟢", description: "WeChat Pay · 微信支付", provider: "stripe" },
+  { id: "paypal",     label: "PayPal",           labelEn: "PayPal",              icon: "🅿️", description: "PayPal 账户支付", provider: "paypal" },
+];
+
 function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: string) => void }) {
   const [activeTab, setActiveTab] = useState("subscription");
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState<"stripe" | "paypal" | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethodType | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [paypalKey, setPaypalKey] = useState(0);
@@ -433,6 +450,10 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
     process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID || "demo";
 
   const isPaypalDemo = paypalClientId === "demo" || paypalClientId === "YOUR_PAYPAL_CLIENT_ID_HERE";
+
+  // 获取当前用户信息
+  const getUserId = () => typeof window !== "undefined" ? localStorage.getItem("user_id") || "anonymous" : "anonymous";
+  const getUserEmail = () => typeof window !== "undefined" ? localStorage.getItem("user_email") || "" : "";
 
   // ── Select plan → reset payment method ──────────────
   const handleSelectPlan = (plan: string) => {
@@ -443,19 +464,24 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
   };
 
   // ═══════════════════════════════════════════════════════
-  //  STRIPE (Primary)
+  //  STRIPE (信用卡 / 支付宝 / 微信支付)
   // ═══════════════════════════════════════════════════════
   const handleStripeCheckout = async () => {
-    if (!selectedPlan) return;
+    if (!selectedPlan || !paymentMethod) return;
     setLoading(true);
     setMessage("");
-    addLog(`[Stripe] 正在创建 ${selectedPlan} 支付会话...`);
+    addLog(`[Stripe] 正在创建 ${selectedPlan} 支付会话 (${paymentMethod})...`);
 
     try {
       const res = await fetch("/api/stripe/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan: selectedPlan }),
+        body: JSON.stringify({
+          plan: selectedPlan,
+          payment_method: paymentMethod === "card" ? "card" : paymentMethod, // "alipay" | "wechat_pay"
+          user_id: getUserId(),
+          email: getUserEmail(),
+        }),
       });
 
       const data = await res.json();
@@ -504,24 +530,39 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
 
   const handlePayPalApprove = async (data: { orderID: string }) => {
     addLog(`[PayPal] 支付已批准，正在捕获订单 ${data.orderID}...`);
-    const res = await fetch("/api/paypal/capture-order", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ orderId: data.orderID }),
-    });
-    const capture = await res.json();
-    if (!res.ok) throw new Error(capture.error || "捕获 PayPal 订单失败");
-    if (capture.mock) {
-      addLog(`[PayPal] 演示模式: 捕获成功 (模拟)`);
-      setMessage(`✅ 演示模式 — ${selectedPlan} 购买成功`);
-      return;
-    }
-    if (capture.status === "COMPLETED") {
-      addLog(`[PayPal] 支付成功! 订单 ${capture.id}, 金额 $${capture.amount?.value || "?"}`);
-      setMessage(`✅ 支付成功! 感谢订阅 ${selectedPlan} 🎉`);
-    } else {
-      addLog(`[PayPal] 支付状态异常: ${capture.status}`);
-      setMessage(`⚠️ 支付状态: ${capture.status}`);
+    try {
+      const res = await fetch("/api/paypal/capture-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId: data.orderID }),
+      });
+      const capture = await res.json();
+      if (!res.ok) throw new Error(capture.error || "捕获 PayPal 订单失败");
+      if (capture.mock) {
+        addLog(`[PayPal] 演示模式: 捕获成功 (模拟)`);
+        setMessage(`✅ 演示模式 — ${selectedPlan} 购买成功`);
+        return;
+      }
+      if (capture.status === "COMPLETED") {
+        addLog(`[PayPal] 支付成功! 订单 ${capture.id}, 金额 $${capture.amount?.value || "?"}`);
+
+        // 通过订阅 API 激活用户权限
+        const userId = localStorage.getItem("user_id") || `paypal_${data.orderID}`;
+        const email = localStorage.getItem("user_email") || "";
+
+        await fetch(`/api/v1/billing/subscribe?plan=${selectedPlan}&user_id=${encodeURIComponent(userId)}&email=${encodeURIComponent(email)}&provider=paypal&order_id=${data.orderID}`, {
+          method: "POST",
+        });
+
+        setMessage(`✅ 支付成功! 感谢订阅 ${selectedPlan} 🎉`);
+        addLog(`[PayPal] 订阅已激活: userId=${userId}, plan=${selectedPlan}`);
+      } else {
+        addLog(`[PayPal] 支付状态异常: ${capture.status}`);
+        setMessage(`⚠️ 支付状态: ${capture.status}`);
+      }
+    } catch (error: any) {
+      addLog(`[PayPal Error] ${error.message}`);
+      setMessage(`❌ ${error.message}`);
     }
   };
 
@@ -608,48 +649,58 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
             <div className="section-label" style={{ textAlign: "center", fontSize: 12, color: "#94a3b8", marginBottom: 10 }}>
               选择支付方式
             </div>
-            <div className="payment-method-grid" style={{ display: "flex", gap: 10 }}>
-              {/* Stripe - Primary */}
-              <button
-                className="payment-method-btn payment-method-stripe"
-                style={{
-                  flex: 1, padding: "14px 8px", borderRadius: 10, border: "1px solid #1e293b",
-                  background: "#0f172a", cursor: "pointer", textAlign: "center",
-                }}
-                onClick={() => setPaymentMethod("stripe")}
-              >
-                <div style={{ fontSize: 22, marginBottom: 4 }}>💳</div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#f1f5f9" }}>信用卡 / 借记卡</div>
-                <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Visa · Mastercard · Apple Pay · Google Pay</div>
+            <div className="payment-method-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              {/* 信用卡 - Stripe */}
+              <button className="payment-method-btn" onClick={() => setPaymentMethod("card")}>
+                <div className="pmt-icon">💳</div>
+                <div className="pmt-name">信用卡 / 借记卡</div>
+                <div className="pmt-desc">Visa · Mastercard · JCB · UnionPay</div>
               </button>
 
-              {/* PayPal - Secondary */}
-              <button
-                className="payment-method-btn payment-method-paypal"
-                style={{
-                  flex: 1, padding: "14px 8px", borderRadius: 10, border: "1px solid #1e293b",
-                  background: "#0f172a", cursor: "pointer", textAlign: "center",
-                }}
-                onClick={() => { setPaymentMethod("paypal"); setPaypalKey((k) => k + 1); }}
-              >
-                <div style={{ fontSize: 22, marginBottom: 4 }}>🅿️</div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#f1f5f9" }}>PayPal</div>
-                <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}> PayPal 账户支付</div>
+              {/* 支付宝 - Stripe */}
+              <button className="payment-method-btn pmt-alipay" onClick={() => setPaymentMethod("alipay")}>
+                <div className="pmt-icon">🔵</div>
+                <div className="pmt-name">支付宝</div>
+                <div className="pmt-desc">Alipay · 支付宝</div>
+              </button>
+
+              {/* 微信支付 - Stripe */}
+              <button className="payment-method-btn pmt-wechat" onClick={() => setPaymentMethod("wechat_pay")}>
+                <div className="pmt-icon">🟢</div>
+                <div className="pmt-name">微信支付</div>
+                <div className="pmt-desc">WeChat Pay · 微信支付</div>
+              </button>
+
+              {/* PayPal */}
+              <button className="payment-method-btn" onClick={() => { setPaymentMethod("paypal"); setPaypalKey((k) => k + 1); }}>
+                <div className="pmt-icon">🅿️</div>
+                <div className="pmt-name">PayPal</div>
+                <div className="pmt-desc">PayPal 账户支付</div>
               </button>
             </div>
           </div>
         )}
 
-        {/* ─── Stripe Checkout Button ──────────────────── */}
-        {selectedPlan && paymentMethod === "stripe" && (
+        {/* ─── Stripe Checkout Buttons ─────────────────── */}
+        {selectedPlan && (paymentMethod === "card" || paymentMethod === "alipay" || paymentMethod === "wechat_pay") && (
           <div className="stripe-section" style={{ marginTop: 16 }}>
             <button
-              className="btn-primary"
-              style={{ width: "100%", padding: "12px 0", fontSize: 15 }}
+              className="btn-primary stripe-pay-btn"
+              style={{ width: "100%", padding: "14px 0", fontSize: 15, height: "auto" }}
               onClick={handleStripeCheckout}
               disabled={loading}
             >
-              {loading ? "处理中..." : `💳 信用卡支付 $${selectedPlan === "monthly" ? "9.99" : selectedPlan === "yearly" ? "79.99" : "199.00"}`}
+              {loading ? (
+                <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                  <span className="spinner" /> 处理中...
+                </span>
+              ) : (
+                <>
+                  {paymentMethod === "card" && `💳 信用卡支付 $${selectedPlan === "monthly" ? "9.99" : selectedPlan === "yearly" ? "79.99" : "199.00"}`}
+                  {paymentMethod === "alipay" && `🔵 支付宝支付 ¥${selectedPlan === "monthly" ? (9.99 * 7.2).toFixed(0) : selectedPlan === "yearly" ? (79.99 * 7.2).toFixed(0) : (199 * 7.2).toFixed(0)}`}
+                  {paymentMethod === "wechat_pay" && `🟢 微信支付 ¥${selectedPlan === "monthly" ? (9.99 * 7.2).toFixed(0) : selectedPlan === "yearly" ? (79.99 * 7.2).toFixed(0) : (199 * 7.2).toFixed(0)}`}
+                </>
+              )}
             </button>
             <button
               className="btn-back"
