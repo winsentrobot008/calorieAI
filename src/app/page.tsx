@@ -423,11 +423,41 @@ function LoginModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: st
 function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: string) => void }) {
   const [activeTab, setActiveTab] = useState("subscription");
   const [loading, setLoading] = useState(false); const [message, setMessage] = useState("");
+
   const handlePurchase = async (plan: string) => {
     setLoading(true); setMessage("");
-    await new Promise(r => setTimeout(r, 800));
-    setMessage(`✅ 购买成功: ${plan}`); addLog(`[BILLING] 购买成功: ${plan}`);
-    setLoading(false);
+    addLog(`[BILLING] 正在创建 ${plan} 支付会话...`);
+
+    try {
+      const res = await fetch("/api/stripe/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "创建支付会话失败");
+      }
+
+      if (data.mock) {
+        // 演示模式: 直接显示成功
+        setMessage(`✅ 演示模式 — ${plan} 购买成功`);
+        addLog(`[BILLING] 演示模式: ${plan} 购买成功`);
+        setLoading(false);
+        return;
+      }
+
+      // 真实模式: 跳转到 Stripe Checkout
+      addLog(`[BILLING] 正在跳转到 Stripe 支付页面...`);
+      window.location.href = data.url;
+    } catch (error: any) {
+      const errMsg = error.message || "支付失败";
+      setMessage(`❌ ${errMsg}`);
+      addLog(`[BILLING Error] ${errMsg}`);
+      setLoading(false);
+    }
   };
 
   return (
