@@ -420,78 +420,102 @@ function LoginModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: st
   );
 }
 
-// ─── Billing Modal ─────────────────────────────────────────────────────
+// ─── Billing Modal — Dual Channel (Stripe 主 + PayPal 辅) ─────────────
 function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: string) => void }) {
   const [activeTab, setActiveTab] = useState("subscription");
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<"stripe" | "paypal" | null>(null);
+  const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
-  const [paypalKey, setPaypalKey] = useState(0); // force re-mount PayPalButtons on plan change
+  const [paypalKey, setPaypalKey] = useState(0);
 
   const paypalClientId =
-    (typeof window !== "undefined"
-      ? (window as any).ENV?.NEXT_PUBLIC_PAYPAL_CLIENT_ID
-      : undefined) ||
-    process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID ||
-    "demo";
+    process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID || "demo";
 
-  const isDemo = paypalClientId === "demo" || paypalClientId === "YOUR_PAYPAL_CLIENT_ID_HERE";
+  const isPaypalDemo = paypalClientId === "demo" || paypalClientId === "YOUR_PAYPAL_CLIENT_ID_HERE";
 
+  // ── Select plan → reset payment method ──────────────
   const handleSelectPlan = (plan: string) => {
     setSelectedPlan(plan);
+    setPaymentMethod(null);
     setMessage("");
-    setPaypalKey((k) => k + 1);
     addLog(`[BILLING] 已选择方案: ${plan}`);
   };
 
-  // ── PayPal order creation callback ──────────────────
-  const createOrder = async (): Promise<string> => {
-    if (!selectedPlan) throw new Error("请先选择方案");
+  // ═══════════════════════════════════════════════════════
+  //  STRIPE (Primary)
+  // ═══════════════════════════════════════════════════════
+  const handleStripeCheckout = async () => {
+    if (!selectedPlan) return;
+    setLoading(true);
+    setMessage("");
+    addLog(`[Stripe] 正在创建 ${selectedPlan} 支付会话...`);
 
+    try {
+      const res = await fetch("/api/stripe/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan: selectedPlan }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "创建支付会话失败");
+      }
+
+      if (data.mock) {
+        setMessage(`✅ 演示模式 — ${selectedPlan} 购买成功`);
+        addLog(`[Stripe] 演示模式: ${selectedPlan} 购买成功`);
+        setLoading(false);
+        return;
+      }
+
+      addLog(`[Stripe] 正在跳转到支付页面...`);
+      window.location.href = data.url;
+    } catch (error: any) {
+      const errMsg = error.message || "支付失败";
+      setMessage(`❌ ${errMsg}`);
+      addLog(`[Stripe Error] ${errMsg}`);
+      setLoading(false);
+    }
+  };
+
+  // ═══════════════════════════════════════════════════════
+  //  PAYPAL (Secondary)
+  // ═══════════════════════════════════════════════════════
+  const createPayPalOrder = async (): Promise<string> => {
+    if (!selectedPlan) throw new Error("请先选择方案");
     addLog(`[PayPal] 正在创建订单 (${selectedPlan})...`);
     const res = await fetch("/api/paypal/create-order", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ plan: selectedPlan }),
     });
-
     const data = await res.json();
-
-    if (!res.ok) {
-      throw new Error(data.error || "创建 PayPal 订单失败");
-    }
-
+    if (!res.ok) throw new Error(data.error || "创建 PayPal 订单失败");
     if (data.mock) {
-      // 演示模式: 直接标记完成
       addLog(`[PayPal] 演示模式: 订单 ${data.id} (模拟)`);
       return data.id;
     }
-
     addLog(`[PayPal] 订单已创建: ${data.id}`);
     return data.id;
   };
 
-  // ── PayPal approval callback ────────────────────────
-  const onApprove = async (data: { orderID: string }) => {
+  const handlePayPalApprove = async (data: { orderID: string }) => {
     addLog(`[PayPal] 支付已批准，正在捕获订单 ${data.orderID}...`);
-
     const res = await fetch("/api/paypal/capture-order", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ orderId: data.orderID }),
     });
-
     const capture = await res.json();
-
-    if (!res.ok) {
-      throw new Error(capture.error || "捕获 PayPal 订单失败");
-    }
-
+    if (!res.ok) throw new Error(capture.error || "捕获 PayPal 订单失败");
     if (capture.mock) {
       addLog(`[PayPal] 演示模式: 捕获成功 (模拟)`);
       setMessage(`✅ 演示模式 — ${selectedPlan} 购买成功`);
       return;
     }
-
     if (capture.status === "COMPLETED") {
       addLog(`[PayPal] 支付成功! 订单 ${capture.id}, 金额 $${capture.amount?.value || "?"}`);
       setMessage(`✅ 支付成功! 感谢订阅 ${selectedPlan} 🎉`);
@@ -501,8 +525,7 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
     }
   };
 
-  // ── PayPal error callback ───────────────────────────
-  const onError = (err: Record<string, unknown>) => {
+  const handlePayPalError = (err: Record<string, unknown>) => {
     const errMsg = err?.message || "PayPal 支付失败";
     addLog(`[PayPal Error] ${errMsg}`);
     setMessage(`❌ ${errMsg}`);
@@ -526,21 +549,23 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
         </div>
         {message && <div className="billing-message">{message}</div>}
 
+        {/* ─── Tab: 订阅 / 买断 ─────────────────────────── */}
         <div className="billing-tabs">
           <button
             className={`billing-tab ${activeTab === "subscription" ? "active" : ""}`}
-            onClick={() => { setActiveTab("subscription"); setSelectedPlan(null); }}
+            onClick={() => { setActiveTab("subscription"); setSelectedPlan(null); setPaymentMethod(null); }}
           >
             订阅方案
           </button>
           <button
             className={`billing-tab ${activeTab === "license" ? "active" : ""}`}
-            onClick={() => { setActiveTab("license"); setSelectedPlan(null); }}
+            onClick={() => { setActiveTab("license"); setSelectedPlan(null); setPaymentMethod(null); }}
           >
             永久买断
           </button>
         </div>
 
+        {/* ─── Plan Cards ──────────────────────────────── */}
         {activeTab === "subscription" && (
           <div className="plan-grid">
             {plans.map((p) => (
@@ -553,16 +578,9 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
                 </div>
                 {p.plan === "yearly" && <div className="plan-save">节省 $39.89/年</div>}
                 <ul className="plan-features">
-                  <li>无限次 AI 食物识别</li>
-                  <li>详细营养分析</li>
-                  <li>7 天趋势图表</li>
-                  <li>AI 饮食建议</li>
-                  <li>无广告体验</li>
+                  <li>无限次 AI 食物识别</li><li>详细营养分析</li><li>7 天趋势图表</li><li>AI 饮食建议</li><li>无广告体验</li>
                 </ul>
-                <button
-                  className="btn-primary plan-btn"
-                  onClick={() => handleSelectPlan(p.plan)}
-                >
+                <button className="btn-primary plan-btn" onClick={() => handleSelectPlan(p.plan)}>
                   选择 {p.label}
                 </button>
               </div>
@@ -574,69 +592,114 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
           <div className="license-section">
             <div className={`plan-card permanent-card ${selectedPlan === "permanent" ? "selected" : ""}`}>
               <div className="plan-name">永久买断</div>
-              <div className="plan-price">
-                <span className="price">$199</span>
-                <span className="period">一次付费，永久使用</span>
-              </div>
-              <ul className="plan-features">
-                <li>所有 Pro 功能永久解锁</li>
-                <li>无时间限制 · 无续费</li>
-                <li>无广告体验</li>
-                <li>优先体验新功能</li>
-                <li>终身免费更新</li>
-              </ul>
-              <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", margin: "4px 0 12px" }}>
-                相当于 16 个月 Pro 费用，永久使用
-              </div>
-              <button
-                className="btn-primary plan-btn btn-license"
-                onClick={() => handleSelectPlan("permanent")}
-              >
+              <div className="plan-price"><span className="price">$199</span><span className="period">一次付费，永久使用</span></div>
+              <ul className="plan-features"><li>所有 Pro 功能永久解锁</li><li>无时间限制 · 无续费</li><li>无广告体验</li><li>优先体验新功能</li><li>终身免费更新</li></ul>
+              <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", margin: "4px 0 12px" }}>相当于 16 个月 Pro 费用，永久使用</div>
+              <button className="btn-primary plan-btn btn-license" onClick={() => handleSelectPlan("permanent")}>
                 选择永久买断
               </button>
             </div>
           </div>
         )}
 
-        {/* PayPal Button Area — shown after plan selection */}
-        {selectedPlan && (
-          <div className="paypal-section" style={{ marginTop: 16, padding: "0 4px" }}>
-            <div className="paypal-divider" style={{ textAlign: "center", fontSize: 11, color: "#64748b", marginBottom: 10 }}>
-              — 使用 PayPal 安全支付 —
+        {/* ─── Payment Method Selection ────────────────── */}
+        {selectedPlan && !paymentMethod && (
+          <div className="payment-method-section" style={{ marginTop: 16 }}>
+            <div className="section-label" style={{ textAlign: "center", fontSize: 12, color: "#94a3b8", marginBottom: 10 }}>
+              选择支付方式
             </div>
-            {isDemo ? (
+            <div className="payment-method-grid" style={{ display: "flex", gap: 10 }}>
+              {/* Stripe - Primary */}
+              <button
+                className="payment-method-btn payment-method-stripe"
+                style={{
+                  flex: 1, padding: "14px 8px", borderRadius: 10, border: "1px solid #1e293b",
+                  background: "#0f172a", cursor: "pointer", textAlign: "center",
+                }}
+                onClick={() => setPaymentMethod("stripe")}
+              >
+                <div style={{ fontSize: 22, marginBottom: 4 }}>💳</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#f1f5f9" }}>信用卡 / 借记卡</div>
+                <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>Visa · Mastercard · Apple Pay · Google Pay</div>
+              </button>
+
+              {/* PayPal - Secondary */}
+              <button
+                className="payment-method-btn payment-method-paypal"
+                style={{
+                  flex: 1, padding: "14px 8px", borderRadius: 10, border: "1px solid #1e293b",
+                  background: "#0f172a", cursor: "pointer", textAlign: "center",
+                }}
+                onClick={() => { setPaymentMethod("paypal"); setPaypalKey((k) => k + 1); }}
+              >
+                <div style={{ fontSize: 22, marginBottom: 4 }}>🅿️</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#f1f5f9" }}>PayPal</div>
+                <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}> PayPal 账户支付</div>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ─── Stripe Checkout Button ──────────────────── */}
+        {selectedPlan && paymentMethod === "stripe" && (
+          <div className="stripe-section" style={{ marginTop: 16 }}>
+            <button
+              className="btn-primary"
+              style={{ width: "100%", padding: "12px 0", fontSize: 15 }}
+              onClick={handleStripeCheckout}
+              disabled={loading}
+            >
+              {loading ? "处理中..." : `💳 信用卡支付 $${selectedPlan === "monthly" ? "9.99" : selectedPlan === "yearly" ? "79.99" : "199.00"}`}
+            </button>
+            <button
+              className="btn-back"
+              style={{ width: "100%", marginTop: 6, padding: "6px 0", fontSize: 11, color: "#64748b", background: "none", border: "none", cursor: "pointer" }}
+              onClick={() => setPaymentMethod(null)}
+            >
+              ← 返回选择其他支付方式
+            </button>
+          </div>
+        )}
+
+        {/* ─── PayPal Buttons ──────────────────────────── */}
+        {selectedPlan && paymentMethod === "paypal" && (
+          <div className="paypal-section" style={{ marginTop: 16, padding: "0 4px" }}>
+            {isPaypalDemo ? (
               <button
                 className="btn-primary"
-                style={{ width: "100%", padding: "10px 0" }}
+                style={{ width: "100%", padding: "12px 0", fontSize: 15 }}
                 onClick={() => {
                   addLog(`[PayPal Demo] 模拟支付成功: ${selectedPlan}`);
                   setMessage(`✅ 演示模式 — ${selectedPlan} 购买成功`);
                 }}
               >
-                模拟支付 (演示模式)
+                🅿️ 模拟 PayPal 支付 (演示模式)
               </button>
             ) : (
               <PayPalScriptProvider
                 key={paypalKey}
-                options={{
-                  clientId: paypalClientId,
-                  currency: "USD",
-                  intent: "capture",
-                }}
+                options={{ clientId: paypalClientId, currency: "USD", intent: "capture" }}
               >
                 <PayPalButtons
                   style={{ layout: "vertical", color: "gold", shape: "rect", label: "pay" }}
-                  createOrder={createOrder}
-                  onApprove={onApprove}
-                  onError={onError}
+                  createOrder={createPayPalOrder}
+                  onApprove={handlePayPalApprove}
+                  onError={handlePayPalError}
                 />
               </PayPalScriptProvider>
             )}
+            <button
+              className="btn-back"
+              style={{ width: "100%", marginTop: 6, padding: "6px 0", fontSize: 11, color: "#64748b", background: "none", border: "none", cursor: "pointer" }}
+              onClick={() => setPaymentMethod(null)}
+            >
+              ← 返回选择其他支付方式
+            </button>
           </div>
         )}
 
         <div className="billing-footer">
-          <p>支付由 PayPal 安全处理。可随时取消订阅。</p>
+          <p>支付由 Stripe 与 PayPal 安全处理。可随时取消订阅。</p>
         </div>
       </div>
     </div>
