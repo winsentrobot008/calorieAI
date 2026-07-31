@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "CalorieAI - 智能卡路里助手",
-  description: "AI 驱动的卡路里追踪与控制台面板",
+  title: "CalorieAI - AI Calorie Assistant",
+  description: "AI-powered calorie tracking & dashboard",
 };
 
 export default function RootLayout({
@@ -25,7 +25,7 @@ export default function RootLayout({
 }>) {
   return (
     <html
-      lang="zh-CN"
+      lang="en"
       suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >

@@ -4,14 +4,16 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { useTheme } from "@/components/theme-provider";
 import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
 import { Sun, Moon, Upload, Mic, X } from "lucide-react";
+import { t, useLocale } from "@/lib/i18n";
+import LocaleSwitcher from "@/components/locale-switcher";
 
 // ─── Constants ────────────────────────────────────────────────────────
 const API = "/api";
 const MEAL_TYPES = [
-  { value: "breakfast", label: "早餐" },
-  { value: "lunch", label: "午餐" },
-  { value: "dinner", label: "晚餐" },
-  { value: "snack", label: "加餐" },
+  { value: "breakfast", labelKey: "meal_type_breakfast" },
+  { value: "lunch", labelKey: "meal_type_lunch" },
+  { value: "dinner", labelKey: "meal_type_dinner" },
+  { value: "snack", labelKey: "meal_type_snack" },
 ];
 
 const MOCK_FOODS = [
@@ -39,7 +41,7 @@ const MOCK_TREND_DAYS = [
 function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
   return (
-    <button onClick={toggleTheme} className="rounded-full p-2 transition-colors hover:bg-zinc-700/50" aria-label="切换主题">
+    <button onClick={toggleTheme} className="rounded-full p-2 transition-colors hover:bg-zinc-700/50" aria-label={t("toggle_theme")}>
       {theme === "dark" ? <Sun className="h-4 w-4 text-yellow-400" /> : <Moon className="h-4 w-4 text-zinc-400" />}
     </button>
   );
@@ -83,8 +85,8 @@ function CalCircle({ calories, target }: { calories: number; target: number }) {
         <text x="60" y="52" textAnchor="middle" fill="#f1f5f9" fontSize="22" fontWeight="700">{calories.toFixed(0)}</text>
         <text x="60" y="70" textAnchor="middle" fill="#64748b" fontSize="11">/ {target.toFixed(0)} kcal</text>
       </svg>
-      {diff > 0 ? <span style={{ fontSize: 12, color: "#fbbf24", marginTop: 4 }}>超标 {diff.toFixed(0)} kcal</span>
-        : <span style={{ fontSize: 12, color: "#34d399", marginTop: 4 }}>还可摄入 {Math.abs(diff).toFixed(0)} kcal</span>}
+      {diff > 0 ? <span style={{ fontSize: 12, color: "#fbbf24", marginTop: 4 }}>{t("cal_over_target", { diff: diff.toFixed(0) })}</span>
+        : <span style={{ fontSize: 12, color: "#34d399", marginTop: 4 }}>{t("cal_remaining", { diff: Math.abs(diff).toFixed(0) })}</span>}
     </div>
   );
 }
@@ -98,17 +100,17 @@ function MealDistribution({ trendDays }: { trendDays: typeof MOCK_TREND_DAYS }) 
   const total = mt.breakfast + mt.lunch + mt.dinner + mt.snack;
   if (total === 0) return null;
   const items = [
-    { label: "早餐", cal: mt.breakfast, color: "#f59e0b" },
-    { label: "午餐", cal: mt.lunch, color: "#34d399" },
-    { label: "晚餐", cal: mt.dinner, color: "#60a5fa" },
-    { label: "加餐", cal: mt.snack, color: "#a78bfa" },
+    { label: t("meal_type_breakfast"), cal: mt.breakfast, color: "#f59e0b" },
+    { label: t("meal_type_lunch"), cal: mt.lunch, color: "#34d399" },
+    { label: t("meal_type_dinner"), cal: mt.dinner, color: "#60a5fa" },
+    { label: t("meal_type_snack"), cal: mt.snack, color: "#a78bfa" },
   ].filter(i => i.cal > 0);
   if (!items.length) return null;
   const r = 40; const circ = 2 * Math.PI * r;
   let offset = 0;
   return (
     <div className="card" style={{ marginTop: 0 }}>
-      <div className="card-title">今日饮食分布</div>
+      <div className="card-title">{t("today_meal_distribution")}</div>
       <div style={{ display: "flex", alignItems: "center", gap: 16, justifyContent: "center" }}>
         <svg width="110" height="110" viewBox="0 0 100 100">
           {items.map((item, i) => {
@@ -153,10 +155,10 @@ function TrendChart() {
   if (!data.length) return null;
   return (
     <div className="card" style={{ position: "relative" }}>
-      <div className="card-title">卡路里趋势</div>
+      <div className="card-title">{t("calorie_trend")}</div>
       <div className="trend-toggle">
-        <button className={`trend-btn ${period === "weekly" ? "active" : ""}`} onClick={() => setPeriod("weekly")}>本周</button>
-        <button className={`trend-btn ${period === "monthly" ? "active" : ""}`} onClick={() => setPeriod("monthly")}>本月</button>
+        <button className={`trend-btn ${period === "weekly" ? "active" : ""}`} onClick={() => setPeriod("weekly")}>{t("weekly")}</button>
+        <button className={`trend-btn ${period === "monthly" ? "active" : ""}`} onClick={() => setPeriod("monthly")}>{t("monthly")}</button>
       </div>
       <div className="trend-container">
         <svg viewBox={`0 0 ${W} ${H}`} className="trend-chart-svg" onMouseLeave={() => setTooltip(null)}>
@@ -175,7 +177,7 @@ function TrendChart() {
           })}
           {data.map((d, i) => {
             const x = getX(i);
-            const label = period === "weekly" ? (i === 0 ? "6天前" : i === data.length - 1 ? "今天" : d.weekday) : d.date.slice(5);
+            const label = period === "weekly" ? (i === 0 ? t("days_ago_6") : i === data.length - 1 ? t("today") : d.weekday) : d.date.slice(5);
             if (period === "monthly" && i % 5 !== 0 && i !== data.length - 1) return null;
             return <text key={i} x={x} y={H - 4} textAnchor="middle" fill="#64748b" fontSize="8">{label}</text>;
           })}
@@ -253,31 +255,31 @@ function MealRecorder({ addLog }: { addLog: (msg: string) => void }) {
 
   return (
     <div>
-      <div className="card"><div className="card-title">选择餐次</div>
-        <div className="meal-type-row">{MEAL_TYPES.map(mt => (<button key={mt.value} className={`meal-type-btn ${mealType === mt.value ? "active" : ""}`} onClick={() => setMealType(mt.value)}>{mt.label}</button>))}</div>
+      <div className="card"><div className="card-title">{t("select_meal_type")}</div>
+        <div className="meal-type-row">{MEAL_TYPES.map(mt => (<button key={mt.value} className={`meal-type-btn ${mealType === mt.value ? "active" : ""}`} onClick={() => setMealType(mt.value)}>{t(mt.labelKey)}</button>))}</div>
       </div>
-      <div className="card"><div className="card-title">选择输入方式</div>
+      <div className="card"><div className="card-title">{t("select_input_mode")}</div>
         <div className="tab-bar" style={{ margin: 0 }}>
-          <button className={`tab ${mode === "image" ? "active" : ""}`} onClick={() => setMode("image")}>拍照/上传</button>
-          <button className={`tab ${mode === "text" ? "active" : ""}`} onClick={() => setMode("text")}>文字输入</button>
+          <button className={`tab ${mode === "image" ? "active" : ""}`} onClick={() => setMode("image")}>{t("image_upload")}</button>
+          <button className={`tab ${mode === "text" ? "active" : ""}`} onClick={() => setMode("text")}>{t("text_input")}</button>
         </div>
       </div>
-      {previewUrl && (<div className="card"><div className="card-title">图片预览</div>
+      {previewUrl && (<div className="card"><div className="card-title">{t("image_preview")}</div>
         <img src={previewUrl} alt="food preview" className="preview-thumb" />
       </div>)}
-      {mode === "image" && (<div className="card"><div className="card-title">上传食物照片</div><div className="upload-area">
+      {mode === "image" && (<div className="card"><div className="card-title">{t("upload_food_photo")}</div><div className="upload-area">
         <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleImageUpload} />
         <button className="upload-btn" onClick={() => fileRef.current?.click()} disabled={analyzing}>
-          {analyzing ? <span className="spinner" /> : <><Upload className="h-4 w-4" /> 拍照或选择图片</>}
+          {analyzing ? <span className="spinner" /> : <><Upload className="h-4 w-4" /> {t("take_or_select_image")}</>}
         </button>
       </div></div>)}
-      {mode === "text" && (<div className="card"><div className="card-title">描述你吃了什么</div>
-        <textarea className="text-input" placeholder="例如：中午吃了一碗米饭 + 一块鸡胸肉 + 一盘西兰花" value={text} onChange={e => setText(e.target.value)} />
+      {mode === "text" && (<div className="card"><div className="card-title">{t("describe_food")}</div>
+        <textarea className="text-input" placeholder={t("text_input_placeholder")} value={text} onChange={e => setText(e.target.value)} />
         <button className="submit-btn" style={{ marginTop: 10 }} disabled={!text.trim() || analyzing} onClick={handleTextSubmit}>
-          {analyzing ? <span className="spinner" /> : <><Mic className="h-4 w-4" /> AI 估算卡路里</>}
+          {analyzing ? <span className="spinner" /> : <><Mic className="h-4 w-4" /> {t("ai_estimate")}</>}
         </button>
       </div>)}
-      {result && result.length > 0 && (<div className="card"><div className="card-title">识别结果</div>
+      {result && result.length > 0 && (<div className="card"><div className="card-title">{t("recognition_result")}</div>
         {result.map((rec, i) => (<div key={i}>
           <div className="food-item clickable" onClick={() => setExpandedIdx(expandedIdx === i ? null : i)}>
             <div style={{ flex: 1 }}>
@@ -289,14 +291,14 @@ function MealRecorder({ addLog }: { addLog: (msg: string) => void }) {
             <div className="food-nutrition"><div className="food-cal">{rec.calories} kcal</div><div className="food-macro">P{rec.protein_g} · F{rec.fat_g} · C{rec.carbs_g}</div></div>
           </div>
           {expandedIdx === i && (<div className="food-detail"><div className="detail-grid">
-            <div className="detail-item"><span className="detail-label">蛋白质</span><span className="detail-value">{rec.protein_g}g</span></div>
-            <div className="detail-item"><span className="detail-label">脂肪</span><span className="detail-value">{rec.fat_g}g</span></div>
-            <div className="detail-item"><span className="detail-label">碳水</span><span className="detail-value">{rec.carbs_g}g</span></div>
-            <div className="detail-item"><span className="detail-label">份量</span><span className="detail-value">{rec.grams}g</span></div>
+            <div className="detail-item"><span className="detail-label">{t("detail_protein")}</span><span className="detail-value">{rec.protein_g}g</span></div>
+            <div className="detail-item"><span className="detail-label">{t("detail_fat")}</span><span className="detail-value">{rec.fat_g}g</span></div>
+            <div className="detail-item"><span className="detail-label">{t("detail_carbs")}</span><span className="detail-value">{rec.carbs_g}g</span></div>
+            <div className="detail-item"><span className="detail-label">{t("detail_grams")}</span><span className="detail-value">{rec.grams}g</span></div>
           </div></div>)}
         </div>))}
         <div className="food-item" style={{ borderBottom: "none", marginTop: 4 }}>
-          <div className="food-name">总计</div>
+          <div className="food-name">{t("total")}</div>
           <div className="food-nutrition">
             <div className="food-cal">{result.reduce((s, r) => s + r.calories, 0).toFixed(0)} kcal</div>
             <div className="food-macro">P{result.reduce((s, r) => s + r.protein_g, 0).toFixed(1)} · F{result.reduce((s, r) => s + r.fat_g, 0).toFixed(1)} · C{result.reduce((s, r) => s + r.carbs_g, 0).toFixed(1)}</div>
@@ -313,15 +315,15 @@ function DailyDashboard() {
   return (<div>
     <div className="card" style={{ padding: "10px 16px", textAlign: "center" }}><span style={{ fontSize: 12, color: "#64748b" }}>2026-07-24</span></div>
     <div className="card" style={{ display: "flex", justifyContent: "center" }}><CalCircle calories={s.calories} target={g.daily_calories || 2000} /></div>
-    <div className="card"><div className="card-title">营养明细</div>
-      <StatBar label="蛋白质" current={s.protein_g} target={g.daily_protein || 60} unit="g" color="#34d399" />
-      <StatBar label="脂肪" current={s.fat_g} target={g.daily_fat || 65} unit="g" color="#60a5fa" />
-      <StatBar label="碳水" current={s.carbs_g} target={g.daily_carbs || 300} unit="g" color="#fbbf24" />
-      {s.meal_count > 0 && <div style={{ textAlign: "center", marginTop: 8, fontSize: 11, color: "#64748b" }}>共 {s.meal_count} 条饮食记录</div>}
+    <div className="card"><div className="card-title">{t("nutrition_detail")}</div>
+      <StatBar label={t("detail_protein")} current={s.protein_g} target={g.daily_protein || 60} unit="g" color="#34d399" />
+      <StatBar label={t("detail_fat")} current={s.fat_g} target={g.daily_fat || 65} unit="g" color="#60a5fa" />
+      <StatBar label={t("detail_carbs")} current={s.carbs_g} target={g.daily_carbs || 300} unit="g" color="#fbbf24" />
+      {s.meal_count > 0 && <div style={{ textAlign: "center", marginTop: 8, fontSize: 11, color: "#64748b" }}>{t("total_meal_records", { count: s.meal_count })}</div>}
     </div>
     <MealDistribution trendDays={MOCK_TREND_DAYS} />
     <TrendChart />
-    <div className="card"><div className="card-title">AI 饮食建议</div>
+    <div className="card"><div className="card-title">{t("ai_suggestions")}</div>
       {MOCK_SUGGESTIONS.map((sg, i) => (<div key={i} className="suggestion-card"><span className="suggestion-icon">{sg.icon}</span><div><div className="suggestion-title">{sg.title}</div><div className="suggestion-detail">{sg.detail}</div></div></div>))}
     </div>
   </div>);
@@ -355,25 +357,25 @@ function Profile({ addLog }: { addLog: (msg: string) => void }) {
   };
 
   return (<div>
-    <div className="card"><div className="card-title">用户信息</div>
-      <div className="form-group"><label className="form-label">昵称</label><input className="form-input" value={name} onChange={e => setName(e.target.value)} placeholder="你的昵称" /></div>
-      <div className="form-group"><label className="form-label">用户 ID</label><input className="form-input" value={userId} disabled style={{ opacity: 0.6 }} /></div>
+    <div className="card"><div className="card-title">{t("user_info")}</div>
+      <div className="form-group"><label className="form-label">{t("nickname")}</label><input className="form-input" value={name} onChange={e => setName(e.target.value)} placeholder={t("nickname_placeholder")} /></div>
+      <div className="form-group"><label className="form-label">{t("user_id_label")}</label><input className="form-input" value={userId} disabled style={{ opacity: 0.6 }} /></div>
     </div>
-    <div className="card"><div className="card-title">每日目标</div>
-      <div className="form-group"><label className="form-label">目标类型</label>
+    <div className="card"><div className="card-title">{t("daily_goals")}</div>
+      <div className="form-group"><label className="form-label">{t("goal_type")}</label>
         <div className="goal-type-row">
-          {[{ value: "lose", label: "减脂" }, { value: "maintain", label: "维持" }, { value: "gain", label: "增肌" }].map(opt => (
-            <button key={opt.value} className={`goal-btn ${goalType === opt.value ? "active" : ""}`} onClick={() => setGoalType(opt.value)}>{opt.label}</button>
+          {[{ value: "lose", labelKey: "goal_lose" }, { value: "maintain", labelKey: "goal_maintain" }, { value: "gain", labelKey: "goal_gain" }].map(opt => (
+            <button key={opt.value} className={`goal-btn ${goalType === opt.value ? "active" : ""}`} onClick={() => setGoalType(opt.value)}>{t(opt.labelKey)}</button>
           ))}
         </div>
       </div>
-      <div className="form-group"><label className="form-label">每日卡路里目标 (kcal)</label><input className="form-input" type="number" value={dailyCalories} onChange={e => setDailyCalories(Number(e.target.value))} min={500} max={10000} /></div>
+      <div className="form-group"><label className="form-label">{t("daily_calorie_target")}</label><input className="form-input" type="number" value={dailyCalories} onChange={e => setDailyCalories(Number(e.target.value))} min={500} max={10000} /></div>
       <div className="macro-grid">
-        <div className="form-group"><label className="form-label" style={{ color: "#34d399" }}>蛋白质 (g)</label><input className="form-input" type="number" value={dailyProtein} onChange={e => setDailyProtein(Number(e.target.value))} min={0} /></div>
-        <div className="form-group"><label className="form-label" style={{ color: "#60a5fa" }}>脂肪 (g)</label><input className="form-input" type="number" value={dailyFat} onChange={e => setDailyFat(Number(e.target.value))} min={0} /></div>
-        <div className="form-group"><label className="form-label" style={{ color: "#fbbf24" }}>碳水 (g)</label><input className="form-input" type="number" value={dailyCarbs} onChange={e => setDailyCarbs(Number(e.target.value))} min={0} /></div>
+        <div className="form-group"><label className="form-label" style={{ color: "#34d399" }}>{t("detail_protein")} (g)</label><input className="form-input" type="number" value={dailyProtein} onChange={e => setDailyProtein(Number(e.target.value))} min={0} /></div>
+        <div className="form-group"><label className="form-label" style={{ color: "#60a5fa" }}>{t("detail_fat")} (g)</label><input className="form-input" type="number" value={dailyFat} onChange={e => setDailyFat(Number(e.target.value))} min={0} /></div>
+        <div className="form-group"><label className="form-label" style={{ color: "#fbbf24" }}>{t("detail_carbs")} (g)</label><input className="form-input" type="number" value={dailyCarbs} onChange={e => setDailyCarbs(Number(e.target.value))} min={0} /></div>
       </div>
-      <button className="submit-btn" onClick={handleSave} disabled={saving} style={{ marginTop: 12 }}>{saving ? <span className="spinner" /> : saved ? "✅ 已保存" : "💾 保存目标"}</button>
+      <button className="submit-btn" onClick={handleSave} disabled={saving} style={{ marginTop: 12 }}>{saving ? <span className="spinner" /> : saved ? t("saved") : t("save_goal")}</button>
     </div>
   </div>);
 }
@@ -404,17 +406,17 @@ function LoginModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: st
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content login-modal" onClick={e => e.stopPropagation()}>
-        <div className="modal-header"><h2>{mode === "login" ? "登录" : "注册"}</h2><button className="modal-close" onClick={onClose}><X className="h-5 w-5" /></button></div>
+        <div className="modal-header"><h2>{mode === "login" ? t("login_title") : t("login_register")}</h2><button className="modal-close" onClick={onClose}><X className="h-5 w-5" /></button></div>
         <form onSubmit={handleSubmit} className="login-form">
           {error && <div className="login-error">{error}</div>}
-          {mode === "register" && (<div className="form-group"><label>昵称</label><input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="你的昵称" className="form-input" /></div>)}
-          <div className="form-group"><label>邮箱</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} required placeholder="your@email.com" className="form-input" /></div>
-          <div className="form-group"><label>密码</label><input type="password" value={password} onChange={e => setPassword(e.target.value)} required minLength={4} placeholder="••••••" className="form-input" /></div>
-          <button type="submit" className="btn-primary login-submit" disabled={loading}>{loading ? "..." : (mode === "login" ? "登录" : "注册")}</button>
+          {mode === "register" && (<div className="form-group"><label>{t("nickname")}</label><input type="text" value={name} onChange={e => setName(e.target.value)} placeholder={t("nickname_placeholder")} className="form-input" /></div>)}
+          <div className="form-group"><label>{t("login_email")}</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} required placeholder="your@email.com" className="form-input" /></div>
+          <div className="form-group"><label>{t("login_password")}</label><input type="password" value={password} onChange={e => setPassword(e.target.value)} required minLength={4} placeholder="••••••" className="form-input" /></div>
+          <button type="submit" className="btn-primary login-submit" disabled={loading}>{loading ? "..." : (mode === "login" ? t("login_title") : t("login_register"))}</button>
         </form>
-        <div className="login-toggle"><button className="btn-link" onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); }}>{mode === "login" ? "没有账号？注册" : "已有账号？登录"}</button></div>
-        <div className="login-anonymous"><p>不想注册？继续使用游客模式</p><button className="btn-secondary login-anon-btn" onClick={handleAnonymous}>游客模式继续</button></div>
-        {typeof window !== "undefined" && localStorage.getItem("user_email") && (<div className="login-logout"><button className="btn-link logout-btn" onClick={() => { localStorage.removeItem("user_id"); localStorage.removeItem("user_email"); addLog("[AUTH] 已退出登录"); onClose(); }}>退出登录</button></div>)}
+        <div className="login-toggle"><button className="btn-link" onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); }}>{mode === "login" ? t("no_account_register") : t("have_account_login")}</button></div>
+        <div className="login-anonymous"><p>{t("login_anonymous_hint")}</p><button className="btn-secondary login-anon-btn" onClick={handleAnonymous}>{t("login_continue_anon")}</button></div>
+        {typeof window !== "undefined" && localStorage.getItem("user_email") && (<div className="login-logout"><button className="btn-link logout-btn" onClick={() => { localStorage.removeItem("user_id"); localStorage.removeItem("user_email"); addLog("[AUTH] 已退出登录"); onClose(); }}>{t("logout")}</button></div>)}
       </div>
     </div>
   );
@@ -487,7 +489,7 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.error || "创建支付会话失败");
+        throw new Error(data.error || t("stripe_error_create"));
       }
 
       if (data.mock) {
@@ -500,7 +502,7 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
       addLog(`[Stripe] 正在跳转到支付页面...`);
       window.location.href = data.url;
     } catch (error: any) {
-      const errMsg = error.message || "支付失败";
+      const errMsg = error.message || t("billing_error_payment_failed");
       setMessage(`❌ ${errMsg}`);
       addLog(`[Stripe Error] ${errMsg}`);
       setLoading(false);
@@ -511,7 +513,7 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
   //  PAYPAL (Secondary)
   // ═══════════════════════════════════════════════════════
   const createPayPalOrder = async (): Promise<string> => {
-    if (!selectedPlan) throw new Error("请先选择方案");
+    if (!selectedPlan) throw new Error(t("billing_error_select_plan_first"));
     addLog(`[PayPal] 正在创建订单 (${selectedPlan})...`);
     const res = await fetch("/api/paypal/create-order", {
       method: "POST",
@@ -519,7 +521,7 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
       body: JSON.stringify({ plan: selectedPlan }),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "创建 PayPal 订单失败");
+    if (!res.ok) throw new Error(data.error || t("paypal_error_create"));
     if (data.mock) {
       addLog(`[PayPal] 演示模式: 订单 ${data.id} (模拟)`);
       return data.id;
@@ -537,7 +539,7 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
         body: JSON.stringify({ orderId: data.orderID }),
       });
       const capture = await res.json();
-      if (!res.ok) throw new Error(capture.error || "捕获 PayPal 订单失败");
+      if (!res.ok) throw new Error(capture.error || t("paypal_error_capture"));
       if (capture.mock) {
         addLog(`[PayPal] 演示模式: 捕获成功 (模拟)`);
         setMessage(`✅ 演示模式 — ${selectedPlan} 购买成功`);
@@ -567,7 +569,7 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
   };
 
   const handlePayPalError = (err: Record<string, unknown>) => {
-    const errMsg = err?.message || "PayPal 支付失败";
+    const errMsg = err?.message || t("paypal_error");
     addLog(`[PayPal Error] ${errMsg}`);
     setMessage(`❌ ${errMsg}`);
   };
@@ -582,11 +584,11 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content billing-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>升级到 Pro</h2>
+          <h2>{t("billing_upgrade_pro")}</h2>
           <button className="modal-close" onClick={onClose}><X className="h-5 w-5" /></button>
         </div>
         <div className="billing-status-bar">
-          <span className="badge badge-free">免费用户 — 每日 3 次免费识别</span>
+          <span className="badge badge-free">{t("billing_free_user")}</span>
         </div>
         {message && <div className="billing-message">{message}</div>}
 
@@ -596,13 +598,13 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
             className={`billing-tab ${activeTab === "subscription" ? "active" : ""}`}
             onClick={() => { setActiveTab("subscription"); setSelectedPlan(null); setPaymentMethod(null); }}
           >
-            订阅方案
+            {t("billing_subscription")}
           </button>
           <button
             className={`billing-tab ${activeTab === "license" ? "active" : ""}`}
             onClick={() => { setActiveTab("license"); setSelectedPlan(null); setPaymentMethod(null); }}
           >
-            永久买断
+            {t("billing_license")}
           </button>
         </div>
 
@@ -611,18 +613,18 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
           <div className="plan-grid">
             {plans.map((p) => (
               <div key={p.plan} className={`plan-card ${p.popular ? "popular" : ""} ${selectedPlan === p.plan ? "selected" : ""}`}>
-                {p.popular && <div className="plan-badge">最受欢迎</div>}
-                <div className="plan-name">{p.label}</div>
+                {p.popular && <div className="plan-badge">{t("billing_most_popular")}</div>}
+                <div className="plan-name">{t(p.plan === "monthly" ? "billing_monthly" : "billing_yearly")}</div>
                 <div className="plan-price">
                   <span className="price">${p.price}</span>
-                  <span className="period">/{p.plan === "monthly" ? "月" : "年"}</span>
+                  <span className="period">{t(p.plan === "monthly" ? "billing_period_month" : "billing_period_year")}</span>
                 </div>
-                {p.plan === "yearly" && <div className="plan-save">节省 $39.89/年</div>}
+                {p.plan === "yearly" && <div className="plan-save">{t("billing_save_yearly")}</div>}
                 <ul className="plan-features">
-                  <li>无限次 AI 食物识别</li><li>详细营养分析</li><li>7 天趋势图表</li><li>AI 饮食建议</li><li>无广告体验</li>
+                  <li>{t("billing_features_unlimited")}</li><li>{t("billing_features_nutrition")}</li><li>{t("billing_features_trends")}</li><li>{t("billing_features_suggestions")}</li><li>{t("billing_features_noads")}</li>
                 </ul>
                 <button className="btn-primary plan-btn" onClick={() => handleSelectPlan(p.plan)}>
-                  选择 {p.label}
+                  {t("billing_select_plan", { plan: t(p.plan === "monthly" ? "billing_monthly" : "billing_yearly") })}
                 </button>
               </div>
             ))}
@@ -632,12 +634,12 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
         {activeTab === "license" && (
           <div className="license-section">
             <div className={`plan-card permanent-card ${selectedPlan === "permanent" ? "selected" : ""}`}>
-              <div className="plan-name">永久买断</div>
-              <div className="plan-price"><span className="price">$199</span><span className="period">一次付费，永久使用</span></div>
-              <ul className="plan-features"><li>所有 Pro 功能永久解锁</li><li>无时间限制 · 无续费</li><li>无广告体验</li><li>优先体验新功能</li><li>终身免费更新</li></ul>
-              <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", margin: "4px 0 12px" }}>相当于 16 个月 Pro 费用，永久使用</div>
+              <div className="plan-name">{t("billing_license")}</div>
+              <div className="plan-price"><span className="price">$199</span><span className="period">{t("billing_one_time")}</span></div>
+              <ul className="plan-features"><li>{t("billing_features_all")}</li><li>{t("billing_features_lifetime")}</li><li>{t("billing_features_noads")}</li><li>{t("billing_features_early_access")}</li><li>{t("billing_features_free_updates")}</li></ul>
+              <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", margin: "4px 0 12px" }}>{t("billing_license_value")}</div>
               <button className="btn-primary plan-btn btn-license" onClick={() => handleSelectPlan("permanent")}>
-                选择永久买断
+                {t("billing_select_permanent")}
               </button>
             </div>
           </div>
@@ -647,35 +649,35 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
         {selectedPlan && !paymentMethod && (
           <div className="payment-method-section" style={{ marginTop: 16 }}>
             <div className="section-label" style={{ textAlign: "center", fontSize: 12, color: "#94a3b8", marginBottom: 10 }}>
-              选择支付方式
+              {t("billing_payment_method")}
             </div>
             <div className="payment-method-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               {/* 信用卡 - Stripe */}
               <button className="payment-method-btn" onClick={() => setPaymentMethod("card")}>
                 <div className="pmt-icon">💳</div>
-                <div className="pmt-name">信用卡 / 借记卡</div>
-                <div className="pmt-desc">Visa · Mastercard · JCB · UnionPay</div>
+                <div className="pmt-name">{t("billing_pay_card")}</div>
+                <div className="pmt-desc">{t("billing_pay_card_desc")}</div>
               </button>
 
               {/* 支付宝 - Stripe */}
               <button className="payment-method-btn pmt-alipay" onClick={() => setPaymentMethod("alipay")}>
                 <div className="pmt-icon">🔵</div>
-                <div className="pmt-name">支付宝</div>
-                <div className="pmt-desc">Alipay · 支付宝</div>
+                <div className="pmt-name">{t("billing_pay_alipay")}</div>
+                <div className="pmt-desc">{t("billing_pay_alipay_desc")}</div>
               </button>
 
               {/* 微信支付 - Stripe */}
               <button className="payment-method-btn pmt-wechat" onClick={() => setPaymentMethod("wechat_pay")}>
                 <div className="pmt-icon">🟢</div>
-                <div className="pmt-name">微信支付</div>
-                <div className="pmt-desc">WeChat Pay · 微信支付</div>
+                <div className="pmt-name">{t("billing_pay_wechat")}</div>
+                <div className="pmt-desc">{t("billing_pay_wechat_desc")}</div>
               </button>
 
               {/* PayPal */}
               <button className="payment-method-btn" onClick={() => { setPaymentMethod("paypal"); setPaypalKey((k) => k + 1); }}>
                 <div className="pmt-icon">🅿️</div>
-                <div className="pmt-name">PayPal</div>
-                <div className="pmt-desc">PayPal 账户支付</div>
+                <div className="pmt-name">{t("billing_pay_paypal")}</div>
+                <div className="pmt-desc">{t("billing_pay_paypal_desc")}</div>
               </button>
             </div>
           </div>
@@ -692,13 +694,13 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
             >
               {loading ? (
                 <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-                  <span className="spinner" /> 处理中...
+                  <span className="spinner" /> {t("billing_processing")}
                 </span>
               ) : (
                 <>
-                  {paymentMethod === "card" && `💳 信用卡支付 $${selectedPlan === "monthly" ? "9.99" : selectedPlan === "yearly" ? "79.99" : "199.00"}`}
-                  {paymentMethod === "alipay" && `🔵 支付宝支付 ¥${selectedPlan === "monthly" ? (9.99 * 7.2).toFixed(0) : selectedPlan === "yearly" ? (79.99 * 7.2).toFixed(0) : (199 * 7.2).toFixed(0)}`}
-                  {paymentMethod === "wechat_pay" && `🟢 微信支付 ¥${selectedPlan === "monthly" ? (9.99 * 7.2).toFixed(0) : selectedPlan === "yearly" ? (79.99 * 7.2).toFixed(0) : (199 * 7.2).toFixed(0)}`}
+                  {paymentMethod === "card" && t("billing_pay_btn_card", { amount: `$${selectedPlan === "monthly" ? "9.99" : selectedPlan === "yearly" ? "79.99" : "199.00"}` })}
+                  {paymentMethod === "alipay" && t("billing_pay_btn_alipay", { amount: `¥${selectedPlan === "monthly" ? (9.99 * 7.2).toFixed(0) : selectedPlan === "yearly" ? (79.99 * 7.2).toFixed(0) : (199 * 7.2).toFixed(0)}` })}
+                  {paymentMethod === "wechat_pay" && t("billing_pay_btn_wechat", { amount: `¥${selectedPlan === "monthly" ? (9.99 * 7.2).toFixed(0) : selectedPlan === "yearly" ? (79.99 * 7.2).toFixed(0) : (199 * 7.2).toFixed(0)}` })}
                 </>
               )}
             </button>
@@ -707,7 +709,7 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
               style={{ width: "100%", marginTop: 6, padding: "6px 0", fontSize: 11, color: "#64748b", background: "none", border: "none", cursor: "pointer" }}
               onClick={() => setPaymentMethod(null)}
             >
-              ← 返回选择其他支付方式
+              {t("billing_back")}
             </button>
           </div>
         )}
@@ -724,7 +726,7 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
                   setMessage(`✅ 演示模式 — ${selectedPlan} 购买成功`);
                 }}
               >
-                🅿️ 模拟 PayPal 支付 (演示模式)
+                {t("billing_paypal_demo")}
               </button>
             ) : (
               <PayPalScriptProvider
@@ -744,13 +746,13 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
               style={{ width: "100%", marginTop: 6, padding: "6px 0", fontSize: 11, color: "#64748b", background: "none", border: "none", cursor: "pointer" }}
               onClick={() => setPaymentMethod(null)}
             >
-              ← 返回选择其他支付方式
+              {t("billing_back")}
             </button>
           </div>
         )}
 
         <div className="billing-footer">
-          <p>支付由 Stripe 与 PayPal 安全处理。可随时取消订阅。</p>
+          <p>{t("billing_footer")}</p>
         </div>
       </div>
     </div>
@@ -772,9 +774,9 @@ function TTSPanel({ addLog }: { addLog: (msg: string) => void }) {
       addLog("[TTS] 正在播放..."); await audio.play();
     } catch { addLog("[TTS Error] 语音合成失败"); setPlaying(false); }
   };
-  return (<div className="card"><div className="card-title">🔊 Edge-TTS 语音测试</div>
-    <textarea className="text-input" rows={2} value={text} onChange={e => setText(e.target.value)} placeholder="输入要朗读的文本..." />
-    <div style={{ marginTop: 10 }}><button className="submit-btn" disabled={!text.trim() || playing} onClick={handleSpeak} style={{ height: 38, fontSize: 12 }}>{playing ? <span className="spinner" /> : "🔊 朗读"}</button></div>
+  return (<div className="card"><div className="card-title">{t("tts_title")}</div>
+    <textarea className="text-input" rows={2} value={text} onChange={e => setText(e.target.value)} placeholder={t("tts_placeholder")} />
+    <div style={{ marginTop: 10 }}><button className="submit-btn" disabled={!text.trim() || playing} onClick={handleSpeak} style={{ height: 38, fontSize: 12 }}>{playing ? <span className="spinner" /> : t("tts_speak")}</button></div>
   </div>);
 }
 
@@ -791,12 +793,12 @@ function AdminLoginPage({ onLogin }: { onLogin: (s: any) => void }) {
     setLoading(false);
   };
   return (<div className="admin-login-wrapper"><div className="admin-login-card">
-    <h2>🔐 管理后台</h2><p className="admin-login-hint">默认账号: admin / admin123</p>
+    <h2>{t("admin_title")}</h2><p className="admin-login-hint">{t("admin_default_hint")}</p>
     <form onSubmit={handleLogin}>
-      <div className="form-group"><label className="form-label">用户名</label><input className="form-input" value={username} onChange={e => setUsername(e.target.value)} placeholder="admin" /></div>
-      <div className="form-group"><label className="form-label">密码</label><input className="form-input" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="admin123" /></div>
+      <div className="form-group"><label className="form-label">{t("admin_username")}</label><input className="form-input" value={username} onChange={e => setUsername(e.target.value)} placeholder="admin" /></div>
+      <div className="form-group"><label className="form-label">{t("admin_password")}</label><input className="form-input" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="admin123" /></div>
       {error && <p className="admin-login-error">{error}</p>}
-      <button className="submit-btn" type="submit" disabled={loading}>{loading ? "登录中..." : "登录"}</button>
+      <button className="submit-btn" type="submit" disabled={loading}>{loading ? t("admin_logging_in") : t("login_title")}</button>
     </form>
   </div></div>);
 }
@@ -806,26 +808,26 @@ function AdminDashboardPage({ session, onLogout }: { session: any; onLogout: () 
   const [tab, setTab] = useState("overview");
   function TabContent() {
     if (tab === "overview") return (<div className="admin-overview-grid">
-      <div className="admin-stat-card" style={{ borderLeft: "3px solid #60a5fa" }}><div className="admin-stat-label">总用户数</div><div className="admin-stat-value">128</div></div>
-      <div className="admin-stat-card" style={{ borderLeft: "3px solid #34d399" }}><div className="admin-stat-label">今日识别</div><div className="admin-stat-value">45</div><div className="admin-stat-sub">本周: 312</div></div>
-      <div className="admin-stat-card" style={{ borderLeft: "3px solid #fbbf24" }}><div className="admin-stat-label">活跃订阅</div><div className="admin-stat-value">23</div><div className="admin-stat-sub">永久买断: 7</div></div>
-      <div className="admin-stat-card" style={{ borderLeft: "3px solid #a78bfa" }}><div className="admin-stat-label">模型调用(24h)</div><div className="admin-stat-value">892</div></div>
-      <div className="admin-stat-card" style={{ borderLeft: "3px solid #ef4444" }}><div className="admin-stat-label">错误率</div><div className="admin-stat-value">1.2%</div><div className="admin-stat-sub">错误: 11</div></div>
-      <div className="admin-stat-card" style={{ borderLeft: "3px solid #f59e0b" }}><div className="admin-stat-label">总收入</div><div className="admin-stat-value">$4,599</div></div>
+      <div className="admin-stat-card" style={{ borderLeft: "3px solid #60a5fa" }}><div className="admin-stat-label">{t("admin_total_users")}</div><div className="admin-stat-value">128</div></div>
+      <div className="admin-stat-card" style={{ borderLeft: "3px solid #34d399" }}><div className="admin-stat-label">{t("admin_today_recognitions")}</div><div className="admin-stat-value">45</div><div className="admin-stat-sub">本周: 312</div></div>
+      <div className="admin-stat-card" style={{ borderLeft: "3px solid #fbbf24" }}><div className="admin-stat-label">{t("admin_active_subscriptions")}</div><div className="admin-stat-value">23</div><div className="admin-stat-sub">永久买断: 7</div></div>
+      <div className="admin-stat-card" style={{ borderLeft: "3px solid #a78bfa" }}><div className="admin-stat-label">{t("admin_model_calls")}</div><div className="admin-stat-value">892</div></div>
+      <div className="admin-stat-card" style={{ borderLeft: "3px solid #ef4444" }}><div className="admin-stat-label">{t("admin_error_rate")}</div><div className="admin-stat-value">1.2%</div><div className="admin-stat-sub">错误: 11</div></div>
+      <div className="admin-stat-card" style={{ borderLeft: "3px solid #f59e0b" }}><div className="admin-stat-label">{t("admin_total_revenue")}</div><div className="admin-stat-value">$4,599</div></div>
     </div>);
     if (tab === "users") return (<div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>ID</th><th>名称</th><th>订阅</th><th>买断</th><th>状态</th></tr></thead><tbody><tr><td className="admin-cell-id">user_001...</td><td>Test User</td><td><span className="admin-status active">active</span></td><td>-</td><td>正常</td></tr></tbody></table></div>);
     if (tab === "revenue") return (<div><div className="admin-overview-grid">
-      <div className="admin-stat-card" style={{ borderLeft: "3px solid #f59e0b" }}><div className="admin-stat-label">总收入</div><div className="admin-stat-value">$4,599</div></div>
-      <div className="admin-stat-card" style={{ borderLeft: "3px solid #60a5fa" }}><div className="admin-stat-label">订阅收入</div><div className="admin-stat-value">$3,599</div></div>
-      <div className="admin-stat-card" style={{ borderLeft: "3px solid #a78bfa" }}><div className="admin-stat-label">买断收入</div><div className="admin-stat-value">$1,000</div></div>
-      <div className="admin-stat-card" style={{ borderLeft: "3px solid #34d399" }}><div className="admin-stat-label">发票数</div><div className="admin-stat-value">45</div></div>
+      <div className="admin-stat-card" style={{ borderLeft: "3px solid #f59e0b" }}><div className="admin-stat-label">{t("admin_total_revenue")}</div><div className="admin-stat-value">$4,599</div></div>
+      <div className="admin-stat-card" style={{ borderLeft: "3px solid #60a5fa" }}><div className="admin-stat-label">{t("admin_subscription_revenue")}</div><div className="admin-stat-value">$3,599</div></div>
+      <div className="admin-stat-card" style={{ borderLeft: "3px solid #a78bfa" }}><div className="admin-stat-label">{t("admin_license_revenue")}</div><div className="admin-stat-value">$1,000</div></div>
+      <div className="admin-stat-card" style={{ borderLeft: "3px solid #34d399" }}><div className="admin-stat-label">{t("admin_invoices")}</div><div className="admin-stat-value">45</div></div>
     </div></div>);
     if (tab === "models") return (<div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>模型</th><th>调用次数</th><th>错误</th><th>错误率</th><th>延迟</th></tr></thead><tbody>
       {[{ name: "gpt-4o", calls: 320, errors: 2, error_rate_pct: 0.6, avg_latency_ms: 1200 }, { name: "claude-3.5", calls: 280, errors: 4, error_rate_pct: 1.4, avg_latency_ms: 980 }].map(m => (
         <tr key={m.name}><td>{m.name}</td><td>{m.calls}</td><td style={{ color: m.errors > 0 ? "#ef4444" : "#34d399" }}>{m.errors}</td><td>{m.error_rate_pct}%</td><td>{m.avg_latency_ms}ms</td></tr>
       ))}
     </tbody></table></div>);
-    if (tab === "config") return (<div><div className="admin-config-form"><h4>系统配置</h4><div style={{ background: "#0b0d14", padding: 12, borderRadius: 8, fontSize: 12, color: "#94a3b8" }}>
+    if (tab === "config") return (<div><div className="admin-config-form"><h4>{t("admin_system_config")}</h4><div style={{ background: "#0b0d14", padding: 12, borderRadius: 8, fontSize: 12, color: "#94a3b8" }}>
       <div>ai_provider: gpt-4o</div><div>max_recognitions_per_day: 10</div>
     </div></div></div>);
     if (tab === "logs") return (<div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>时间</th><th>管理员</th><th>操作</th></tr></thead><tbody>
@@ -834,10 +836,10 @@ function AdminDashboardPage({ session, onLogout }: { session: any; onLogout: () 
     return null;
   };
   return (<div className="admin-dashboard">
-    <div className="admin-header"><h2>⚙️ 管理后台</h2><div className="admin-header-right"><span className="admin-user">{session.username} ({session.role})</span><button className="admin-logout-btn" onClick={onLogout}>退出</button></div></div>
+    <div className="admin-header"><h2>{t("admin_title")}</h2><div className="admin-header-right"><span className="admin-user">{session.username} ({session.role})</span><button className="admin-logout-btn" onClick={onLogout}>{t("admin_logout")}</button></div></div>
     <div className="admin-tabs">
-      {[{ id: "overview", label: "系统总览" }, { id: "users", label: "用户管理" }, { id: "revenue", label: "收益统计" }, { id: "models", label: "模型监控" }, { id: "config", label: "配置中心" }, { id: "logs", label: "日志中心" }].map(t => (
-        <button key={t.id} className={`admin-tab ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>{t.label}</button>
+      {[{ id: "overview", labelKey: "admin_tab_overview" }, { id: "users", labelKey: "admin_tab_users" }, { id: "revenue", labelKey: "admin_tab_revenue" }, { id: "models", labelKey: "admin_tab_models" }, { id: "config", labelKey: "admin_tab_config" }, { id: "logs", labelKey: "admin_tab_logs" }].map(tabItem => (
+        <button key={tabItem.id} className={`admin-tab ${tab === tabItem.id ? "active" : ""}`} onClick={() => setTab(tabItem.id)}>{t(tabItem.labelKey)}</button>
       ))}
     </div>
     <div className="admin-content"><TabContent /></div>
@@ -846,6 +848,8 @@ function AdminDashboardPage({ session, onLogout }: { session: any; onLogout: () 
 
 // ─── Main Page ─────────────────────────────────────────────────────────
 export default function Home() {
+  // Re-render the whole tree on language switch so every t() call updates.
+  useLocale();
   const [tab, setTab] = useState("record");
   const [logs, setLogs] = useState(["[System] CalorieAI 已就绪"]);
   const [showLogin, setShowLogin] = useState(false);
@@ -853,8 +857,8 @@ export default function Home() {
   const [adminSession, setAdminSession] = useState<any>(null);
 
   const addLog = useCallback((msg: string) => {
-    const t = `[${new Date().toLocaleTimeString("zh-CN", { hour12: false })}] ${msg}`;
-    setLogs(prev => [...prev.slice(-99), t]);
+    const ts = `[${new Date().toLocaleTimeString("zh-CN", { hour12: false })}] ${msg}`;
+    setLogs(prev => [...prev.slice(-99), ts]);
   }, []);
 
   // Handle admin login
@@ -884,14 +888,15 @@ export default function Home() {
       <header className="header">
         <div className="header-left">
           <span className="logo" onDoubleClick={() => setAdminSession({ pending: true })} style={{ cursor: "pointer" }}>CalorieAI</span>
-          <span className="goal-badge">维持体重</span>
+          <span className="goal-badge">{t("goal_maintain_short")}</span>
         </div>
         <div className="header-right">
-          <span className="daily-target">目标 2000 kcal</span>
-          <button className="btn-upgrade" onClick={() => setShowBilling(true)}>Pro</button>
+          <span className="daily-target">{t("daily_target_label", { calories: 2000 })}</span>
+          <button className="btn-upgrade" onClick={() => setShowBilling(true)}>{t("pro_badge")}</button>
           <button className="btn-login" onClick={() => setShowLogin(true)}>
-            {typeof window !== "undefined" ? localStorage.getItem("user_email")?.split("@")[0] || "登录" : "登录"}
+            {typeof window !== "undefined" ? localStorage.getItem("user_email")?.split("@")[0] || t("login_title") : t("login_title")}
           </button>
+          <LocaleSwitcher />
           <ThemeToggle />
         </div>
       </header>
@@ -901,10 +906,10 @@ export default function Home() {
 
       {/* Tab Bar */}
       <nav className="tab-bar">
-        <button className={`tab ${tab === "record" ? "active" : ""}`} onClick={() => setTab("record")}>记录饮食</button>
-        <button className={`tab ${tab === "dashboard" ? "active" : ""}`} onClick={() => setTab("dashboard")}>数据看板</button>
-        <button className={`tab ${tab === "profile" ? "active" : ""}`} onClick={() => setTab("profile")}>个人设置</button>
-        <button className={`tab ${tab === "tts" ? "active" : ""}`} onClick={() => setTab("tts")}>TTS 测试</button>
+        <button className={`tab ${tab === "record" ? "active" : ""}`} onClick={() => setTab("record")}>{t("record_diet")}</button>
+        <button className={`tab ${tab === "dashboard" ? "active" : ""}`} onClick={() => setTab("dashboard")}>{t("daily_stats")}</button>
+        <button className={`tab ${tab === "profile" ? "active" : ""}`} onClick={() => setTab("profile")}>{t("profile")}</button>
+        <button className={`tab ${tab === "tts" ? "active" : ""}`} onClick={() => setTab("tts")}>{t("nav_tts")}</button>
       </nav>
 
       {/* Content */}
@@ -918,7 +923,7 @@ export default function Home() {
       {/* Log Footer */}
       <footer className="footer">
         <div className="log-bar">
-          <span className="log-label">📋 日志</span>
+          <span className="log-label">{t("log_label")}</span>
           <div className="log-scroll">
             {logs.map((l, i) => (<div key={i} className="log-line">{l}</div>))}
           </div>

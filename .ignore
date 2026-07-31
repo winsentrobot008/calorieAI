@@ -1,0 +1,12 @@
+# Ripgrep / AI 工具忽略 —— 大体积缓存与依赖目录（禁止深度索引）
+node_modules/
+.next/
+out/
+dist/
+build/
+coverage/
+.git/
+data/
+*.tsbuildinfo
+.env.local
+.env.local.backup
