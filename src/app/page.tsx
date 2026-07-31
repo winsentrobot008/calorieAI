@@ -221,7 +221,7 @@ function MealRecorder({ addLog }: { addLog: (msg: string) => void }) {
       fd.append("file", file);
       fd.append("meal_type", mealType);
 
-      const res = await fetch(`${API}/api/v1/meals/analyze-image`, {
+      const res = await fetch(`${API}/v1/meals/analyze-image`, {
         method: "POST",
         body: fd,
       });
@@ -344,7 +344,7 @@ function Profile({ addLog }: { addLog: (msg: string) => void }) {
   useEffect(() => {
     const uid = typeof window !== "undefined" ? localStorage.getItem("user_id") || "anonymous" : "anonymous";
     setUserId(uid);
-    fetch(`${API}/api/v1/user/profile?user_id=${uid}`)
+    fetch(`${API}/v1/user/profile?user_id=${uid}`)
       .then(r => r.ok && r.json()).then(data => { if (data?.user) { const u = data.user; setName(u.name || ""); setGoalType(u.goal_type || "maintain"); setDailyCalories(u.daily_calories || 2000); setDailyProtein(u.daily_protein || 60); setDailyFat(u.daily_fat || 65); setDailyCarbs(u.daily_carbs || 300); } }).catch(() => {});
   }, []);
 
