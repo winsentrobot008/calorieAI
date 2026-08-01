@@ -74,6 +74,38 @@ function killChild(child) {
   }
 }
 
+/** Windows 兜底: 结束仍监听 PORT 的残留进程 (防止 next start 泄漏). */
+function killPort(port) {
+  return new Promise((resolve) => {
+    if (process.platform !== "win32") return resolve();
+    try {
+      const ps = spawn("netstat", ["-ano"], { stdio: ["ignore", "pipe", "pipe"] });
+      let out = "";
+      ps.stdout.on("data", (d) => (out += d.toString()));
+      ps.on("close", () => {
+        const pids = new Set();
+        for (const line of out.split("\n")) {
+          if (line.includes(`:${port}`) && /LISTENING/i.test(line)) {
+            const parts = line.trim().split(/\s+/);
+            const pid = parts[parts.length - 1];
+            if (/^\d+$/.test(pid)) pids.add(pid);
+          }
+        }
+        for (const pid of pids) {
+          try {
+            spawn("taskkill", ["/PID", pid, "/T", "/F"]);
+          } catch {
+            /* ignore */
+          }
+        }
+        resolve();
+      });
+    } catch {
+      resolve();
+    }
+  });
+}
+
 async function main() {
   if (routes.length === 0) {
     console.error("❌ smoke-api: no routes discovered under src/app/api");
@@ -82,7 +114,8 @@ async function main() {
   const mode = FORCE_DEV || !hasBuild ? "dev" : "start";
   console.log(`[smoke-api] mode=next ${mode}  port=${PORT}  routes=${routes.length}`);
 
-  const child = spawn("npm", ["run", mode, "--", "-p", String(PORT), "-H", "127.0.0.1"], {
+  const command = `npm run ${mode} -- -p ${PORT} -H 127.0.0.1`;
+  const child = spawn(command, {
     cwd: rootDir,
     shell: true,
     stdio: ["ignore", "pipe", "pipe"],
@@ -126,6 +159,7 @@ async function main() {
     process.exitCode = 1;
   } finally {
     killChild(child);
+    await killPort(PORT);
     if (process.exitCode !== 0) {
       console.log("\n── server log (tail) ──");
       console.log(serverLog.slice(-2000));
