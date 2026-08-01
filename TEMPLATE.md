@@ -56,6 +56,9 @@ npm run build                # prebuild 自动跑 test:routes
 
 # 5) 绑定域名（Cloudflare + Vercel）
 node scripts/bind-domain.mjs example.com --apply --project <new-project>
+
+# 6) 部署后自动巡检（质检部门 ../qa-inspector）
+cd ../qa-inspector && node scripts/run-qa.mjs https://<new-project>.vercel.app
 ```
 
 ## 4. 质量门禁约定
@@ -65,4 +68,5 @@ node scripts/bind-domain.mjs example.com --apply --project <new-project>
   - 校验字面量 `/api/...` 是否命中 `src/app/api<path>/route.ts`（防运行时 404）
 - `npm run build` 的 `prebuild` 会自动执行 `test:routes`
 - `.githooks/pre-commit` 与 `pre-push` 在 Commit/Push 前强制运行，失败即拦截
-- 提交前: 先 `npm run test:routes` → `npm run build`，全绿再 commit/push
+- 提交前: 先 `npm run test:routes` → `npm run build` → `npm run test:api`，全绿再 commit/push
+- **E2E 巡检 (质检部门)**: `cd ../qa-inspector && node scripts/run-qa.mjs <url>`；失败产物 `screenshots/` + `reports/`

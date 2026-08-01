@@ -7,7 +7,8 @@
 - **静态路由检查**: `npm run test:routes`（`scripts/check-routes.mjs`）— 拦截 `/api/api`、拼接错误、404 路径。
 - **构建验证**: `npm run build`（`prebuild` 已自动跑 test:routes）— 0 Error。
 - **动态 API 冒烟**: `npm run test:api`（`scripts/smoke-api.mjs`）— 启动服务逐个请求所有 `/api` 路由，断言 0 404。
-- **完整门禁**: `npm test`（= test:routes + test:api）。
+- **E2E 巡检 (质检部门)**: `../qa-inspector`（Playwright），`cd ../qa-inspector && node scripts/run-qa.mjs <url>`；`npm run test:e2e` 已内置本项目入口；失败产物 `screenshots/` + `reports/`。
+- **完整门禁**: `npm test`（= test:routes + test:api）；提交前再跑 `npm run build`。
 - **交付标准**: 只有亲自跑完上述流程、并在回复中附上「终端测试通过日志」后，才算完成任务。
 
 ## 技术栈

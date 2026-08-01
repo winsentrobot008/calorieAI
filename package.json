@@ -10,6 +10,7 @@
     "test": "npm run test:routes && npm run test:api",
     "test:routes": "node scripts/check-routes.mjs",
     "test:api": "node scripts/smoke-api.mjs",
+    "test:e2e": "cd ..\\qa-inspector && node scripts/run-qa.mjs http://127.0.0.1:3100",
     "prebuild": "npm run test:routes"
   },
   "dependencies": {

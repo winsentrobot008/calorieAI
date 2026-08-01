@@ -62,7 +62,9 @@ function resolveLocale(): Locale {
   return readStoredLocale() ?? detectBrowserLocale();
 }
 
-let currentLocale: Locale = resolveLocale();
+// 初始为默认语言, 与 SSR 渲染保持一致, 避免 hydration 文本不一致 (React #418);
+// 客户端挂载后由 <LocaleInit /> 调用 applyResolvedLocale() 应用真实首选语言。
+let currentLocale: Locale = DEFAULT_LOCALE;
 
 const listeners = new Set<() => void>();
 
@@ -76,16 +78,21 @@ function emitChange() {
   listeners.forEach((cb) => cb());
 }
 
-// Keep <html lang="..."> in sync with the resolved locale on the client.
-if (typeof window !== "undefined") {
-  applyDocumentLang(currentLocale);
-}
-
 export function getLocale(): Locale {
   return currentLocale;
 }
 
 /** Manually switch the language and persist the preference to localStorage. */
+/**
+ * 应用解析出的首选语言 (localStorage 手动设置 > 系统语言 navigator.language > 默认 en)。
+ * 不写入 localStorage —— 仅用于客户端挂载后的自动适配, 避免污染"手动设置"优先级。
+ */
+export function applyResolvedLocale() {
+  currentLocale = resolveLocale();
+  applyDocumentLang(currentLocale);
+  emitChange();
+}
+
 export function setLocale(locale: Locale) {
   if (!(SUPPORTED_LOCALES as readonly string[]).includes(locale)) return;
   currentLocale = locale;

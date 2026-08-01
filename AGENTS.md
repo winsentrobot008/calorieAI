@@ -22,6 +22,7 @@ Next.js 16 (App Router) + TypeScript + Tailwind v4；支付 Stripe + PayPal；�
 - 命令: `npm run dev` / `build` / `lint` / `test:routes`。
 - 质量门禁: commit/push 前运行 `npm run test:routes`（防 `/api/api` 与 404 路径）；`prebuild` 已绑定；`.githooks` 自动拦截。
 - 交付自检协议: 任何修改完成前必须先跑 `npm run test:routes` + `npm run build` + `npm run test:api`（0 Error / 0 404），并在回复附「终端测试通过日志」；禁止未自检直接宣告完成。
+- 质检部门: `../qa-inspector`（Playwright）；新项目部署后 `cd ../qa-inspector && node scripts/run-qa.mjs <url>` 一键巡检，失败产物 `screenshots/` + `reports/`。
 - 模板: `calorieAI` 为标准模板；初始化新项目时复制通用架构（见 `TEMPLATE.md`），移除业务逻辑，保留支付 + i18n + 域名绑定脚本。
 
 ## 扫描豁免（禁止深度索引）
