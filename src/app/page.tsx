@@ -385,6 +385,11 @@ function LoginModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: st
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState(""); const [password, setPassword] = useState(""); const [name, setName] = useState("");
   const [loading, setLoading] = useState(false); const [error, setError] = useState("");
+  // Hydration 防护: 首次渲染固定与 SSR 一致, 挂载后再读取 localStorage, 避免 React #418
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => {
+    setHydrated(true);
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault(); setLoading(true); setError("");
@@ -416,7 +421,7 @@ function LoginModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: st
         </form>
         <div className="login-toggle"><button className="btn-link" onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); }}>{mode === "login" ? t("no_account_register") : t("have_account_login")}</button></div>
         <div className="login-anonymous"><p>{t("login_anonymous_hint")}</p><button className="btn-secondary login-anon-btn" onClick={handleAnonymous}>{t("login_continue_anon")}</button></div>
-        {typeof window !== "undefined" && localStorage.getItem("user_email") && (<div className="login-logout"><button className="btn-link logout-btn" onClick={() => { localStorage.removeItem("user_id"); localStorage.removeItem("user_email"); addLog("[AUTH] 已退出登录"); onClose(); }}>{t("logout")}</button></div>)}
+        {hydrated && localStorage.getItem("user_email") && (<div className="login-logout"><button className="btn-link logout-btn" onClick={() => { localStorage.removeItem("user_id"); localStorage.removeItem("user_email"); addLog("[AUTH] 已退出登录"); onClose(); }}>{t("logout")}</button></div>)}
       </div>
     </div>
   );
@@ -855,6 +860,7 @@ export default function Home() {
   const [showLogin, setShowLogin] = useState(false);
   const [showBilling, setShowBilling] = useState(false);
   const [adminSession, setAdminSession] = useState<any>(null);
+  const [mounted, setMounted] = useState(false);
 
   const addLog = useCallback((msg: string) => {
     const ts = `[${new Date().toLocaleTimeString("zh-CN", { hour12: false })}] ${msg}`;
@@ -877,6 +883,12 @@ export default function Home() {
     if (saved) setAdminSession(JSON.parse(saved));
   }, []);
 
+  // Hydration 防护: 首次渲染固定渲染 t("login_title") 与 SSR 一致,
+  // 挂载后才读取 localStorage 中的 user_email, 避免 React #418 (DOM 文本不一致)。
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   // If admin is logged in, show admin dashboard
   if (adminSession) {
     return <AdminDashboardPage session={adminSession} onLogout={handleAdminLogout} />;
@@ -894,7 +906,7 @@ export default function Home() {
           <span className="daily-target">{t("daily_target_label", { calories: 2000 })}</span>
           <button className="btn-upgrade" onClick={() => setShowBilling(true)}>{t("pro_badge")}</button>
           <button className="btn-login" onClick={() => setShowLogin(true)}>
-            {typeof window !== "undefined" ? localStorage.getItem("user_email")?.split("@")[0] || t("login_title") : t("login_title")}
+            {mounted ? localStorage.getItem("user_email")?.split("@")[0] || t("login_title") : t("login_title")}
           </button>
           <LocaleSwitcher />
           <ThemeToggle />
