@@ -2,6 +2,14 @@
 
 > 精简速览：只保留技术栈、目录结构、开发规范。
 
+## 🚨 交付前自检协议（Agent 必须遵守）
+- **禁止人工盲测**: 任何代码修改，在通知"修复完成"前，必须先在本机完成自动化验证。
+- **静态路由检查**: `npm run test:routes`（`scripts/check-routes.mjs`）— 拦截 `/api/api`、拼接错误、404 路径。
+- **构建验证**: `npm run build`（`prebuild` 已自动跑 test:routes）— 0 Error。
+- **动态 API 冒烟**: `npm run test:api`（`scripts/smoke-api.mjs`）— 启动服务逐个请求所有 `/api` 路由，断言 0 404。
+- **完整门禁**: `npm test`（= test:routes + test:api）。
+- **交付标准**: 只有亲自跑完上述流程、并在回复中附上「终端测试通过日志」后，才算完成任务。
+
 ## 技术栈
 - 框架: Next.js 16 (App Router) + Turbopack
 - 语言: TypeScript

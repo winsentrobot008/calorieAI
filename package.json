@@ -7,8 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "npm run test:routes",
+    "test": "npm run test:routes && npm run test:api",
     "test:routes": "node scripts/check-routes.mjs",
+    "test:api": "node scripts/smoke-api.mjs",
     "prebuild": "npm run test:routes"
   },
   "dependencies": {
