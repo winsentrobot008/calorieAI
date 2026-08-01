@@ -1,30 +1,32 @@
 # 🧠 CalorieAI — 项目记忆
 
-> 精简速览：只保留技术栈、目录结构、开发规范。
+> 精简速览：技术栈、目录结构、开发规范 + **历史 Bug 自愈履历与关键决策记录**。
+
+---
 
 ## 🚨 交付前自检协议（Agent 必须遵守）
 - **禁止人工盲测**: 任何代码修改，在通知"修复完成"前，必须先在本机完成自动化验证。
 - **静态路由检查**: `npm run test:routes`（`scripts/check-routes.mjs`）— 拦截 `/api/api`、拼接错误、404 路径。
 - **构建验证**: `npm run build`（`prebuild` 已自动跑 test:routes）— 0 Error。
 - **动态 API 冒烟**: `npm run test:api`（`scripts/smoke-api.mjs`）— 启动服务逐个请求所有 `/api` 路由，断言 0 404。
-- **E2E 巡检 (质检部门)**: `../qa-inspector`（Playwright），`cd ../qa-inspector && node scripts/run-qa.mjs <url>`；`npm run test:e2e` 已内置本项目入口；失败产物 `screenshots/` + `reports/`。
+- **E2E 巡检 (质检部门)**: `../qa-inspector`（Playwright），`cd ../qa-inspector && node scripts/run-qa.mjs <url>`；失败产物 `screenshots/` + `reports/`。
 - **完整门禁**: `npm test`（= test:routes + test:api）；提交前再跑 `npm run build`。
 - **交付标准**: 只有亲自跑完上述流程、并在回复中附上「终端测试通过日志」后，才算完成任务。
 
 ## 技术栈
-- 框架: Next.js 16 (App Router) + Turbopack
-- 语言: TypeScript
-- 样式: Tailwind CSS v4
+- 框架: Next.js 16 (App Router) + React 19 + TypeScript + Turbopack
+- 样式与 UI: Tailwind CSS v4 + Lucide Icons
+- 状态与 i18n: 自定义 `LocaleInit` + `hydrated` 状态延迟加载（防 React #418）；`localStorage > navigator.language > en`
 - 支付: Stripe (信用卡/支付宝/微信) + PayPal (`@paypal/react-paypal-js`)
 - AI: Google Gemini Flash / OpenAI GPT-4o Vision
 - TTS: Edge-TTS (Azure Cognitive Services)
-- 部署: Vercel (Git 自动部署，Live Stripe)
+- 部署: Vercel (Git 自动部署) + Cloudflare Wildcard DNS（`*.app008ai.com`）
 
 ## 目录结构
 - `src/app` — 页面 + API 路由
   - `api/` — 后端: `stripe/*`、`paypal/*`、`v1/{billing,meals,user,stats,insight,admin,ads}`、`tts`
   - `billing/` — 支付成功/取消页
-- `src/components` — 前端组件 (`theme-provider`、`locale-switcher`)
+- `src/components` — 前端组件 (`theme-provider`、`locale-init`、`locale-switcher`)
 - `src/lib` — 状态与工具 (`i18n/` 多语言、`billing-store`、`auth`、`oauthDetect`)
 - `scripts/` — 配置检测 + E2E 测试
 - `public/` — 静态资源
@@ -43,7 +45,24 @@
 - `.githooks/pre-commit`、`pre-push`（`core.hooksPath=.githooks`）强制拦截失败提交。
 - 提交流程: `npm run test:routes` → `npm run build` → 全绿再 commit/push。
 
-## 模板约定
-- `calorieAI` 为标准模板（Next.js + i18n + Stripe/PayPal Billing Store + E2E）。
-- 当用户要求「以 calorieAI 为模板初始化新项目 [X]」时：直接复制通用架构代码，**移除 calorieAI 业务逻辑**，**保留支付与国际化模块**。
-- 模板抽离清单见 `TEMPLATE.md`；新项目绑定域名用 `scripts/bind-domain.mjs`（Cloudflare DNS + Vercel）。
+---
+
+# 📜 历史 Bug 自愈履历
+
+| 日期 | Commit | 问题 | 根因 | 修复 |
+|------|--------|------|------|------|
+| 2026-08-01 | `3408c10` | **React #418 Hydration Error（生产线上拦截）** | 渲染期直接读取 `localStorage`（Header 登录按钮 `typeof window !== "undefined" ? localStorage.getItem("user_email")…`），SSR 渲染 `t("login_title")` 而客户端 Hydrate 渲染邮箱前缀 → DOM 文本不一致 | 采用 `mounted`/`hydrated` 双阶段渲染：首屏固定与 SSR 一致，`useEffect` 置位后再读 `localStorage`（[`src/app/page.tsx`](src/app/page.tsx)） |
+| 2026-08-01 | `140e990` | 文档固化 | — | 新增 `PROJECT_SPEC.md`；`README.md` 关联模板文档 |
+| 2026-08-01 | `c37a139` | 文档完善 | — | README 标注 100% Production Ready + 详细技术栈 + QA 质检；PROJECT_SPEC 重建（含 #418 根因与剥离指南） |
+| 2026-08-01 | 本次 | 文档瘦身 | — | 合并 `TEMPLATE.md`（→PROJECT_SPEC 附录 B）、`AGENTS.md`/`CLAUDE.md`（→PROJECT_SPEC §9）；最终仅保留 3 大标准文档 |
+
+> 关联 QA 资产（独立仓库 `../qa-inspector`，commit `78308e6`）：质量守卫豁免 `blob:`/`data:` 对象 URL 误报；新增 `tests/hydration-logged-in.spec.ts` 已登录用户 #418 专项验证。
+
+---
+
+# 🎯 关键决策记录
+
+1. **Hydration 防御策略（决策定稿）**：i18n 初始固定默认语言 `en` + `<LocaleInit />` 挂载后 `applyResolvedLocale()`；所有「读客户端状态」UI 一律 `mounted/hydrated` 双阶段渲染。此为 CalorieAI 及所有套娃项目的强制规范。
+2. **Master Template 定位**：CalorieAI 为 saas-factory-template（标准剥离指南见 [`PROJECT_SPEC.md`](PROJECT_SPEC.md) 附录 A/B）。
+3. **边界隔离纪律**：代码/文档修改限定 `./calorieai`；Git 独立仓库提交；QA 在 `../qa-inspector` 调度。
+4. **文档治理（本次）**：根目录标准化为 3 个 MD —— `README.md`（对外说明）、`PROJECT_SPEC.md`（生产规格+Agent 守则+套娃 SOP）、`MEMORY.md`（记忆+自愈履历+决策）。

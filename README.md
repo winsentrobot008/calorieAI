@@ -234,10 +234,8 @@ TARGET_URL=https://calorie-ai-seven.vercel.app npx playwright test tests/hydrati
 
 | 文档 | 说明 |
 |------|------|
-| [`PROJECT_SPEC.md`](PROJECT_SPEC.md) | **生产规格**：SSR/Hydration 规范（React #418 防护）、交付前自检协议、边界隔离规则 |
-| [`TEMPLATE.md`](TEMPLATE.md) | **模版规范**：以 CalorieAI 为标准模板初始化新项目的复制/裁剪清单 |
-| [`AGENTS.md`](AGENTS.md) | Agent 开发指令与规范 |
-| [`MEMORY.md`](MEMORY.md) | 项目记忆与上下文 |
+| [`PROJECT_SPEC.md`](PROJECT_SPEC.md) | **生产规格**：SSR/Hydration 防护守则、Agent 行为守则、边界隔离、质量门禁 + 套娃 SOP 附录（标准剥离指南/初始化流程） |
+| [`MEMORY.md`](MEMORY.md) | **项目记忆**：技术栈/目录/规范 + 历史 Bug 自愈履历与关键决策记录 |
 | [`.env.example`](.env.example) | 环境变量配置参考 |
 | [`scripts/check-stripe-config.mjs`](scripts/check-stripe-config.mjs) | Stripe 配置检测工具 |
 | [`scripts/test-stripe-e2e.mjs`](scripts/test-stripe-e2e.mjs) | 支付全链路 E2E 测试 |

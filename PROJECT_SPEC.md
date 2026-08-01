@@ -1,9 +1,25 @@
 # 📐 CalorieAI — 项目生产规格 (PROJECT_SPEC)
 
-> **文档定位**：CalorieAI（`calorie-ai-seven.vercel.app`）的生产环境技术规格、SSR/Hydration 规范与交付自检协议。
-> 本文件同时定义 CalorieAI 作为 **saas-factory-template（Master Template）** 的标准剥离指南。
+> **唯一生产规格文档**：本文件统一承载生产规格、Hydration 防护守则、Agent 行为守则与套娃 SOP（合并自 `AGENTS.md` / `CLAUDE.md` / `TEMPLATE.md`）。
 >
-> **完成度**：🟢 100% 生产就绪 (Production Ready) — 已通过 Vercel 线上实盘巡检。
+> **完成度**：🟢 100% 生产就绪 (Production Ready) — 已通过 Vercel 线上实盘巡检（`https://calorie-ai-seven.vercel.app`）
+
+---
+
+## 📑 目录
+- [1. 项目概览](#1-项目概览)
+- [2. 核心架构](#2-核心架构)
+- [3. SSR / Hydration 规范（React #418）](#3-ssr--hydration-规范react-418)
+- [4. i18n 约定](#4-i18n-约定)
+- [5. 支付 / Billing](#5-支付--billing)
+- [6. 交付前 Agent 自检协议](#6-交付前-agent-自检协议)
+- [7. 边界隔离规则](#7-边界隔离规则)
+- [8. 质量门禁](#8-质量门禁)
+- [9. Agent 行为守则](#9-agent-行为守则)
+- [10. 相关文档](#10-相关文档)
+- [附录 A：saas-factory-template 标准剥离指南](#附录-asaas-factory-template-标准剥离指南)
+- [附录 B：套娃 SOP（初始化新项目）](#附录-b套娃-sop初始化新项目)
+- [附录 C：扫描豁免清单](#附录-c扫描豁免清单)
 
 ---
 
@@ -17,7 +33,7 @@
 | **仓库** | `https://github.com/winsentrobot008/calorieAI`（`./calorieai` 独立 Git 仓库，分支 `main`） |
 | **部署** | Vercel（Git 自动部署） |
 | **框架** | Next.js 16.2.11 (App Router) + React 19 + TypeScript + Tailwind CSS v4 |
-| **模板属性** | **Master Template**（详见 §10 saas-factory-template 标准剥离指南） |
+| **模板属性** | **Master Template**（saas-factory-template，见附录 A/B） |
 
 ## 2. 核心架构
 
@@ -39,7 +55,7 @@ src/
     └── oauthDetect.ts        # OAuth 提供商检测
 ```
 
-## 3. 🛡️ SSR / Hydration 规范（React #418 根因与防御）
+## 3. SSR / Hydration 规范（React #418）
 
 ### 3.1 根因（已修复，commit `3408c10`）
 > 生产环境 Vercel 控制台曾拦截 `Uncaught Error: Minified React error #418`。
@@ -85,7 +101,7 @@ src/
 | 订阅状态 | `/api/v1/billing/status` / `subscribe` / `license` / `ad-reward`；持久化 `data/subscriptions.json` |
 | 降级 | 未配置真实密钥时前后端自动进入 **mock 演示模式** |
 
-## 6. ✅ 交付前 Agent 自检协议
+## 6. 交付前 Agent 自检协议
 
 生产变更必须按此顺序执行并全绿：
 
@@ -112,7 +128,7 @@ TARGET_URL=https://calorie-ai-seven.vercel.app npx playwright test tests/hydrati
 
 **全绿判定**：QA 巡检 `1 passed` 且无 `❌ 质检未通过` 输出，方视为交付完成。
 
-## 7. 🛡️ 边界隔离规则（AGI 工厂生产纪律）
+## 7. 边界隔离规则（AGI 工厂生产纪律）
 
 1. **上下文定位**：工作区根为 `git008/projects/`；CalorieAI 代码/文档一律写入 `./calorieai/`。
 2. **Git 隔离**：提交在 `./calorieai` 独立仓库内执行（`git -C calorieai …`），不得影响其他子文件夹。
@@ -125,41 +141,58 @@ TARGET_URL=https://calorie-ai-seven.vercel.app npx playwright test tests/hydrati
 | 路由/API 路径检查 | `scripts/check-routes.mjs` | 拦截 `/api/api`、双斜杠、字面量路径无对应 route（防 404） |
 | pre-commit / pre-push | `.githooks/` | Commit/Push 前强制跑质量门，失败拦截 |
 | 构建 | `next build`（prebuild） | TypeScript + 静态页面生成校验 |
+| 动态 API 冒烟 | `scripts/smoke-api.mjs`（`npm run test:api`） | 启动服务逐个请求所有 `/api` 路由，断言 0 404 |
 | E2E 巡检 | `../qa-inspector` | console / pageerror / 4xx / 404 / requestfailed 全量拦截 |
 
-## 9. 相关文档
+## 9. Agent 行为守则
+
+> 合并自原 `AGENTS.md` / `CLAUDE.md`（`CLAUDE.md` 仅引用 `AGENTS.md`）。
+
+### 9.1 框架感知
+- 本仓库为 **Next.js 16 (App Router)**，存在版本破坏性变更 — 编写代码前先查阅 `node_modules/next/dist/docs/` 相关指南，注意弃用提示。
+
+### 9.2 开发规范
+- **i18n**：文案一律走 `t("key")`，字典 `src/lib/i18n/{zh,en}.json`，禁止硬编码。
+- **支付**：未配密钥走 mock 模拟；Webhook → `billing-store` → `data/subscriptions.json`。
+- **命令**：`npm run dev` / `build` / `lint` / `test:routes` / `test:api`。
+- **环境变量**：见 `.env.example`；`.env.local`、`*.backup` 不入库。
+
+### 9.3 交付纪律
+- **禁止人工盲测**：任何修改在通知"修复完成"前，必须先在本机完成自动化验证。
+- **完整门禁**：`npm run test:routes` → `npm run build` →（服务类变更）`npm run test:api`，全绿再 commit/push。
+- **质检调度**：新项目部署后 `cd ../qa-inspector && node scripts/run-qa.mjs <url>` 一键巡检。
+- **交付标准**：只有亲自跑完上述流程、并在回复附「终端测试通过日志」后，才算完成任务；禁止未自检直接宣告完成。
+
+## 10. 相关文档
 
 | 文档 | 说明 |
 |------|------|
-| [`README.md`](README.md) | 项目使用手册（安装/环境变量/API/部署/QA 质检） |
-| [`TEMPLATE.md`](TEMPLATE.md) | 以 CalorieAI 为模板初始化新项目的复制/裁剪清单 |
-| [`AGENTS.md`](AGENTS.md) | Agent 开发指令与边界 |
-| [`MEMORY.md`](MEMORY.md) | 项目记忆与上下文 |
-| [`CLAUDE.md`](CLAUDE.md) | Claude 协作指引 |
+| [`README.md`](README.md) | 项目对外说明：技术栈、快速启动、QA 质检指令 |
+| [`MEMORY.md`](MEMORY.md) | 项目记忆：技术栈/目录/规范 + 历史 Bug 自愈履历与关键决策 |
 
 ---
 
-## 10. saas-factory-template — 标准剥离指南
+# 附录 A：saas-factory-template — 标准剥离指南
 
 > CalorieAI 作为 **Master Template**，向新项目 [X] 剥离时遵循以下标准步骤与边界。
 
-### 10.1 必须复制（通用架构）
+### A.1 必须复制（通用架构）
 - `src/lib/i18n/`（`index.ts` + `zh.json` + `en.json`）+ `src/components/locale-init.tsx` + `locale-switcher.tsx`
 - `src/components/theme-provider.tsx`
 - Billing：`src/lib/billing-store.ts` + `src/app/api/{stripe,paypal}` + `src/app/api/v1/billing/` + `src/app/billing/`
 - 基建：`scripts/check-routes.mjs`、`scripts/bind-domain.mjs`、`.githooks/`、`.env.example`、`vercel.json`
 
-### 10.2 必须改写（业务剥离）
+### A.2 必须改写（业务剥离）
 - `src/app/page.tsx`：保留 Header/Tab/日志/弹窗框架，业务文案全部 `t("key")` 化，删除 CalorieAI 专属 MOCK 数据
 - `src/app/api/v1/{meals,stats,insight,ads,user}`：按新业务裁剪；保留 `billing/`
 - `src/lib/auth.tsx` / `oauthDetect.ts`：按需替换
 - `zh.json` / `en.json`：新增业务 key
 - `public/`：替换品牌资产
 
-### 10.3 Hydration 规范继承
+### A.3 Hydration 规范继承
 新项目必须继承 §3 的 Hydration 铁律：任何 `localStorage` / `navigator` / `sessionStorage` 读取仅允许发生在 `useEffect` / 事件回调中；首屏渲染必须与 SSR 输出一致；新增「读客户端状态」的 UI 一律采用 `mounted` / `hydrated` 双阶段渲染模式。
 
-### 10.4 剥离验收（全绿门槛）
+### A.4 剥离验收（全绿门槛）
 ```bash
 npm run test:routes && npm run build
 # 本地 E2E
@@ -168,5 +201,64 @@ cd ../qa-inspector && QA_INTERACT=1 node scripts/run-qa.mjs http://localhost:300
 QA_INTERACT=1 node scripts/run-qa.mjs https://<new-project>.vercel.app
 ```
 
-### 10.5 完成度锚点
+### A.5 完成度锚点
 - 完成度以第 6 节「交付前 Agent 自检协议」全绿为 **100% 生产就绪** 标准；达成后可声明 `Production Ready`。
+
+---
+
+# 附录 B：套娃 SOP（初始化新项目）
+
+> 合并自原 `TEMPLATE.md`。用于「以 calorieAI 为模板初始化新项目 [X]」。
+
+### B.1 一键套娃步骤
+
+```bash
+# 1) 复制通用架构（从本仓库）
+#    复制: src/lib/i18n src/components/locale-init.tsx src/components/locale-switcher.tsx \
+#          src/lib/billing-store.ts src/app/api/{stripe,paypal} src/app/api/v1/billing src/app/billing \
+#          src/components/theme-provider.tsx scripts/ .githooks/ .ignore .gitignore \
+#          PROJECT_SPEC.md MEMORY.md AGENTS.md(→并入本文件)
+
+# 2) 重命名项目
+#    package.json name; src/app/layout.tsx metadata; 字典 app_title
+
+# 3) 启用质量门禁
+git config core.hooksPath .githooks
+npm run test:routes          # 路由检查
+npm run build                # prebuild 自动跑 test:routes
+
+# 4) 配置环境变量（复制 .env.example → .env.local 并填入密钥）
+
+# 5) 绑定域名（Cloudflare + Vercel）
+node scripts/bind-domain.mjs example.com --apply --project <new-project>
+
+# 6) 部署后自动巡检（质检部门 ../qa-inspector）
+cd ../qa-inspector && node scripts/run-qa.mjs https://<new-project>.vercel.app
+```
+
+### B.2 通用模块（必须复制）
+- **国际化**：`src/lib/i18n/` + `locale-switcher.tsx`；接入点 `src/app/layout.tsx` 的 `<html lang>` 由 i18n 客户端同步。
+- **收单/计费**：`billing-store.ts` + `stripe/` + `paypal/` + `v1/billing/` + `billing/` 结果页；未配密钥自动 mock 降级。
+- **基础设施**：`theme-provider.tsx`、`check-routes.mjs`、`bind-domain.mjs`、`check-stripe-config.mjs`、`.githooks/`、`.ignore`、`.gitignore`。
+
+### B.3 业务逻辑（新项目移除/替换）
+| 模块 | 处理 |
+|------|------|
+| `src/app/page.tsx` 首页 | 保留框架，替换业务文案为 `t("key")`，移除 MOCK 数据 |
+| `src/app/api/v1/{meals,stats,insight,ads,user}` | 按业务裁剪；保留 `billing/` |
+| `src/lib/auth.tsx`、`oauthDetect.ts` | 按需替换 |
+| `public/` 静态资源 | 替换品牌资产 |
+| 文案字典 | 新增业务 key 到 `zh.json`/`en.json` |
+
+### B.4 质量门禁约定
+- `npm run test:routes`：拦截 `/api/api` 双重前缀、`${API}/api` 拼接、`//` 双斜杠、无对应 route 的 404 路径。
+- `npm run build` 的 `prebuild` 自动执行 `test:routes`。
+- `.githooks/pre-commit` 与 `pre-push` 强制运行，失败即拦截。
+- 提交前：`npm run test:routes` → `npm run build` → `npm run test:api`，全绿再 commit/push。
+- **E2E 巡检（质检部门）**：`cd ../qa-inspector && node scripts/run-qa.mjs <url>`；失败产物 `screenshots/` + `reports/`。
+
+---
+
+# 附录 C：扫描豁免清单
+
+禁止深度索引：`node_modules`、`.next`、`out`、`dist`、`build`、`coverage`、`data`、`.git`、`.env.local*`（详见 `.ignore` / `.gitignore`）。
