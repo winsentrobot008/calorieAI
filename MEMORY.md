@@ -25,9 +25,16 @@
 - **i18n**（`src/lib/i18n`，零依赖）: 优先级 `localStorage > navigator.language > en`；文案必须走 `t("key")`，抽离到 `zh.json`/`en.json`，禁止硬编码中文。
 - **支付**: Stripe Checkout Session + Webhook → `billing-store` → `data/subscriptions.json`；PayPal 走 capture → `subscribe` API；未配密钥时自动降级为 mock 模拟支付。
 - **环境变量**: 见 `.env.example`；`.env.local`、`*.backup` 不入库。
-- **命令**: `npm run dev` / `build` / `lint`。
+- **命令**: `npm run dev` / `build` / `lint` / `test:routes`。
 - **构建产物不索引**: `node_modules`、`.next`、`dist`、`coverage` 等见 `.ignore` / `.gitignore`。
+
+## 质量门禁（Commit/Push 前必过）
+- `npm run test:routes`（`scripts/check-routes.mjs`）: 扫描所有 `/api` 请求路径，拦截 `/api/api` 双重前缀、`${API}/api` 拼接、`//`、以及无对应 route handler 的 404 路径。
+- `npm run build` 的 `prebuild` 已绑定 `test:routes`，构建前自动自检。
+- `.githooks/pre-commit`、`pre-push`（`core.hooksPath=.githooks`）强制拦截失败提交。
+- 提交流程: `npm run test:routes` → `npm run build` → 全绿再 commit/push。
 
 ## 模板约定
 - `calorieAI` 为标准模板（Next.js + i18n + Stripe/PayPal Billing Store + E2E）。
 - 当用户要求「以 calorieAI 为模板初始化新项目 [X]」时：直接复制通用架构代码，**移除 calorieAI 业务逻辑**，**保留支付与国际化模块**。
+- 模板抽离清单见 `TEMPLATE.md`；新项目绑定域名用 `scripts/bind-domain.mjs`（Cloudflare DNS + Vercel）。

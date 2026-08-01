@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "npm run test:routes",
+    "test:routes": "node scripts/check-routes.mjs",
+    "prebuild": "npm run test:routes"
   },
   "dependencies": {
     "@paypal/react-paypal-js": "^10.1.2",

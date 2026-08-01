@@ -1,0 +1,9 @@
+#!/bin/sh
+# CalorieAI quality gate — runs the route/API path check before every commit.
+# Blocks the commit when a broken request path (e.g. duplicated "/api/api") is found.
+echo "🔎 [quality-gate] route/API path check (pre-commit)..."
+if ! node scripts/check-routes.mjs; then
+  echo "❌ Route/API path check failed — fix the reported paths, then commit again."
+  exit 1
+fi
+echo "✅ Route/API path check passed."
