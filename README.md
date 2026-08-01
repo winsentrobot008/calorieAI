@@ -1,6 +1,8 @@
 # CalorieAI — 智能卡路里助手
 
 > AI 驱动的饮食记录与营养分析工具，支持多模态食物识别、智能趋势分析，以及 **Stripe（信用卡/支付宝/微信支付）+ PayPal** 多渠道支付订阅。
+>
+> **完成度**：🟢 100% 生产就绪 (Production Ready) — 已通过 Vercel 线上实盘巡检（`https://calorie-ai-seven.vercel.app`）
 
 ---
 
@@ -22,13 +24,14 @@
 | 类别 | 技术 |
 |------|------|
 | **框架** | [Next.js 16](https://nextjs.org) (App Router) + Turbopack |
-| **语言** | TypeScript |
-| **样式** | Tailwind CSS v4 |
+| **运行时** | React 19 + TypeScript |
+| **样式与 UI** | Tailwind CSS v4 + Lucide Icons |
+| **状态与 i18n** | 自定义 `LocaleInit` + `hydrated` 状态延迟加载（防 React #418） |
 | **支付 (主)** | Stripe — 信用卡 / 支付宝 / 微信支付 |
 | **支付 (辅)** | PayPal SDK (`@paypal/react-paypal-js`) |
 | **AI 视觉** | Google Gemini Flash / OpenAI GPT-4o Vision |
 | **TTS 语音** | Edge-TTS (Azure Cognitive Services) |
-| **部署** | Vercel (Git 自动部署) |
+| **部署与域名** | Vercel (Git 自动部署) + Cloudflare Wildcard DNS (`*.app008ai.com`) |
 
 ---
 
@@ -204,7 +207,30 @@ node scripts/test-stripe-e2e.mjs
 
 ---
 
-## 📖 相关文档
+## 🔍 QA 质检（qa-inspector E2E 巡检）
+
+> 由质检部门 [`../qa-inspector`](../qa-inspector)（Playwright 无头巡检）执行全量质量门禁，断言 **0 Console Error / 0 Uncaught Error (#418) / 0 404 / 0 4xx**。
+
+```bash
+# 线上生产巡检（Vercel）
+cd ../qa-inspector
+QA_INTERACT=1 node scripts/run-qa.mjs https://calorie-ai-seven.vercel.app
+
+# 本地巡检
+QA_INTERACT=1 node scripts/run-qa.mjs http://localhost:3000
+
+# 已登录用户 Hydration #418 专项验证（localStorage 预置 user_email）
+TARGET_URL=https://calorie-ai-seven.vercel.app npx playwright test tests/hydration-logged-in.spec.ts
+```
+
+| 指标 | 结果 |
+|------|------|
+| Vercel 线上巡检 | ✅ `1 passed`（0 Console Error / 0 Uncaught #418 / 0 404） |
+| 已登录场景专项 | ✅ `1 passed`（localStorage 含 `user_email` 亦无 #418） |
+
+---
+
+## � 相关文档
 
 | 文档 | 说明 |
 |------|------|
