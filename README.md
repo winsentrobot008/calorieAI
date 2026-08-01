@@ -208,6 +208,8 @@ node scripts/test-stripe-e2e.mjs
 
 | 文档 | 说明 |
 |------|------|
+| [`PROJECT_SPEC.md`](PROJECT_SPEC.md) | **生产规格**：SSR/Hydration 规范（React #418 防护）、交付前自检协议、边界隔离规则 |
+| [`TEMPLATE.md`](TEMPLATE.md) | **模版规范**：以 CalorieAI 为标准模板初始化新项目的复制/裁剪清单 |
 | [`AGENTS.md`](AGENTS.md) | Agent 开发指令与规范 |
 | [`MEMORY.md`](MEMORY.md) | 项目记忆与上下文 |
 | [`.env.example`](.env.example) | 环境变量配置参考 |
