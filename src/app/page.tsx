@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useTheme } from "@/components/theme-provider";
 import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
-import { Sun, Moon, Upload, Mic, X } from "lucide-react";
+import { Sun, Moon, Mic, X } from "lucide-react";
 import { t, useLocale } from "@/lib/i18n";
 import LocaleSwitcher from "@/components/locale-switcher";
 
@@ -203,22 +203,32 @@ function MealRecorder({ addLog }: { addLog: (msg: string) => void }) {
   const [result, setResult] = useState<typeof MOCK_FOODS | null>(null);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
+  const galleryRef = useRef<HTMLInputElement>(null);
 
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // 仅做本地预览，不触发任何 AI API 请求（API 降本：禁用自动识图）
+  const handleImageSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = ""; // 允许同一文件被再次选择
     if (!file) return;
 
-    // Show local preview immediately
     const blobUrl = URL.createObjectURL(file);
+    setSelectedFile(file);
     setPreviewUrl(blobUrl);
+    setResult(null);
+    addLog(`[Upload] 已选择图片: ${file.name} (${(file.size / 1024).toFixed(1)} KB) — 仅预览，未触发 AI 请求`);
+  };
 
+  // 手动触发识图：仅在用户点击【开始 AI 识图】且已有预览图片时调用后端 AI 接口
+  const handleAnalyze = async () => {
+    if (!previewUrl || !selectedFile) return;
     setAnalyzing(true); setResult(null);
-    addLog(`[Upload] 正在识别: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`);
+    addLog(`[AI] 开始识图: ${selectedFile.name} (${(selectedFile.size / 1024).toFixed(1)} KB)`);
 
     try {
       const fd = new FormData();
-      fd.append("file", file);
+      fd.append("file", selectedFile);
       fd.append("meal_type", mealType);
 
       const res = await fetch(`${API}/v1/meals/analyze-image`, {
@@ -266,12 +276,17 @@ function MealRecorder({ addLog }: { addLog: (msg: string) => void }) {
       </div>
       {previewUrl && (<div className="card"><div className="card-title">{t("image_preview")}</div>
         <img src={previewUrl} alt="food preview" className="preview-thumb" />
+        <button className="submit-btn" style={{ marginTop: 10, width: "100%" }} disabled={!previewUrl || analyzing} onClick={handleAnalyze}>
+          {analyzing ? <span className="spinner" /> : t("start_ai_recognition")}
+        </button>
       </div>)}
       {mode === "image" && (<div className="card"><div className="card-title">{t("upload_food_photo")}</div><div className="upload-area">
-        <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleImageUpload} />
-        <button className="upload-btn" onClick={() => fileRef.current?.click()} disabled={analyzing}>
-          {analyzing ? <span className="spinner" /> : <><Upload className="h-4 w-4" /> {t("take_or_select_image")}</>}
-        </button>
+        <input ref={cameraRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={handleImageSelected} />
+        <input ref={galleryRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleImageSelected} />
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+          <button className="upload-btn" onClick={() => cameraRef.current?.click()} disabled={analyzing}>{t("take_photo")}</button>
+          <button className="upload-btn" onClick={() => galleryRef.current?.click()} disabled={analyzing}>{t("choose_from_gallery")}</button>
+        </div>
       </div></div>)}
       {mode === "text" && (<div className="card"><div className="card-title">{t("describe_food")}</div>
         <textarea className="text-input" placeholder={t("text_input_placeholder")} value={text} onChange={e => setText(e.target.value)} />
