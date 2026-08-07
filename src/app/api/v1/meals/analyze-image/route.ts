@@ -9,7 +9,8 @@ import { NextRequest, NextResponse } from "next/server";
  *   - GEMINI_API_KEY       → Google Gemini Vision
  *   - OPENAI_API_KEY       → OpenAI GPT-4o Vision
  *
- * 如果均未配置，降级返回模拟数据（演示模式）。
+ * 如果均未配置或全部调用失败，返回明确错误（NO_VISION_KEY / VISION_PROVIDER_ERROR），
+ * 不再返回固定 Mock 数据，避免把演示数据误当真实识别结果。
  */
 export async function POST(request: NextRequest) {
   try {
@@ -36,12 +37,15 @@ export async function POST(request: NextRequest) {
     const geminiKey = process.env.GEMINI_API_KEY;
     const openaiKey = process.env.OPENAI_API_KEY;
 
-    // Try Gemini Vision first
+    // Try Gemini Vision first, then OpenAI；任一成功即返回真实识别结果
+    let lastError: Error | null = null;
+
     if (geminiKey) {
       try {
         const result = await analyzeWithGemini(base64, mimeType, mealType, geminiKey);
         return NextResponse.json(result);
       } catch (err: any) {
+        lastError = err;
         console.error("[Vision] Gemini failed:", err.message);
       }
     }
@@ -52,21 +56,26 @@ export async function POST(request: NextRequest) {
         const result = await analyzeWithOpenAI(base64, mimeType, mealType, openaiKey);
         return NextResponse.json(result);
       } catch (err: any) {
+        lastError = err;
         console.error("[Vision] OpenAI failed:", err.message);
       }
     }
 
-    // No API key configured — return mock data for demo
-    console.warn("[Vision] No API key configured, returning mock data");
-    return NextResponse.json({
-      count: 3,
-      records: [
-        { food: "白米饭", food_en: "White Rice", grams: 200, calories: 260, protein_g: 4, fat_g: 0.6, carbs_g: 58, confidence: 0.92, source_model: "mock", lang: "zh" },
-        { food: "鸡胸肉", food_en: "Chicken Breast", grams: 150, calories: 247, protein_g: 46, fat_g: 5.3, carbs_g: 0, confidence: 0.88, source_model: "mock", lang: "zh" },
-        { food: "西兰花", food_en: "Broccoli", grams: 100, calories: 34, protein_g: 2.8, fat_g: 0.4, carbs_g: 7, confidence: 0.95, source_model: "mock", lang: "zh" },
-      ],
-      model: { switched: false, provider: "mock" },
-    });
+    // 全部提供商失败：返回可诊断错误，绝不静默回退到固定 Mock 数据
+    if (lastError) {
+      console.error("[Vision] All providers failed:", lastError.message);
+      return NextResponse.json(
+        { detail: "AI 视觉识别失败: " + lastError.message, code: "VISION_PROVIDER_ERROR" },
+        { status: 502 }
+      );
+    }
+
+    // 无任何密钥：明确报错（NO_VISION_KEY），不再返回固定 Mock 的白米饭
+    console.warn("[Vision] No API key configured (GEMINI_API_KEY / OPENAI_API_KEY)");
+    return NextResponse.json(
+      { detail: "未配置 AI 视觉密钥（GEMINI_API_KEY / OPENAI_API_KEY），无法识图", code: "NO_VISION_KEY" },
+      { status: 503 }
+    );
   } catch (error: any) {
     console.error("[Vision Error]", error);
     return NextResponse.json({ detail: "图像分析失败: " + error.message }, { status: 500 });
@@ -110,8 +119,7 @@ async function analyzeWithGemini(
 
   const data = await response.json();
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "[]";
-  const cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-  const records = JSON.parse(cleaned);
+  const records = parseRecords(text);
 
   return {
     count: records.length,
@@ -162,12 +170,39 @@ async function analyzeWithOpenAI(
 
   const data = await response.json();
   const text = data?.choices?.[0]?.message?.content || "[]";
-  const cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-  const records = JSON.parse(cleaned);
+  const records = parseRecords(text);
 
   return {
     count: records.length,
     records: Array.isArray(records) ? records : [],
     model: { switched: false, provider: "openai" },
   };
+}
+
+/**
+ * 稳健解析 AI 返回的食物 JSON 数组：
+ * 支持纯 JSON、Markdown 代码块包裹，以及前后附带说明文字的场景；
+ * 无法解析时抛出明确错误，交由上层返回可诊断的 502。
+ */
+function parseRecords(text: string): any[] {
+  const cleaned = text.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
+  const tryParse = (raw: string): any[] | null => {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return null;
+    }
+  };
+
+  const direct = tryParse(cleaned);
+  if (direct !== null) return direct;
+
+  const match = cleaned.match(/\[[\s\S]*\]/);
+  if (match) {
+    const extracted = tryParse(match[0]);
+    if (extracted !== null) return extracted;
+  }
+
+  throw new Error("AI 返回内容无法解析为食物 JSON 数组");
 }

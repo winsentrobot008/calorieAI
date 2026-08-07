@@ -216,7 +216,8 @@ function MealRecorder({ addLog }: { addLog: (msg: string) => void }) {
     const blobUrl = URL.createObjectURL(file);
     setSelectedFile(file);
     setPreviewUrl(blobUrl);
-    setResult(null);
+    setResult(null);       // 显式清空旧识别结果（避免残存上次的 Mock/白米饭数据）
+    setExpandedIdx(null);  // 同时收起上次展开的食物明细
     addLog(`[Upload] 已选择图片: ${file.name} (${(file.size / 1024).toFixed(1)} KB) — 仅预览，未触发 AI 请求`);
   };
 
