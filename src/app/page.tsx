@@ -11,6 +11,7 @@ import {
   writeCredits,
   addCredits,
   recordLocalPayment,
+  readLocalPayments,
   localPaymentStats,
   AD_REWARD_CREDITS,
   AD_COUNTDOWN_SECONDS,
@@ -1023,9 +1024,20 @@ function AdminDashboardPage({ session, onLogout }: { session: any; onLogout: () 
   const fmt = (ts?: string) => (ts ? ts.slice(0, 19).replace("T", " ") : "-");
   // 合并本机支付流水（localStorage），保证支付成功后后台 100% 看到 $1.00 增量
   const localPay = localPaymentStats();
+  const localPayments = readLocalPayments();
   const mergedRevenue = Number(rev.total_revenue || 0) + localPay.total;
   const mergedSubs = (o.active_subscriptions || 0) + localPay.count;
   const mergedInvoices = (rev.invoice_count || 0) + localPay.count;
+  const allPayments = [
+    ...localPayments.map((lp) => ({
+      created_at: lp.ts,
+      order_id: lp.orderId,
+      provider: lp.provider,
+      plan: lp.plan,
+      amount: lp.amount,
+    })),
+    ...(rev.recent_payments || []),
+  ];
 
   function TabContent() {
     if (tab === "overview") return (<div className="admin-overview-grid">
@@ -1083,8 +1095,8 @@ function AdminDashboardPage({ session, onLogout }: { session: any; onLogout: () 
         </div>
         <div className="card" style={{ marginTop: 12 }}><div className="card-title">{t("admin_recent_payments")}</div>
           <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>{t("admin_time")}</th><th>订单</th><th>渠道</th><th>方案</th><th>金额</th></tr></thead><tbody>
-            {(rev.recent_payments || []).map((p: any, i: number) => (<tr key={i}><td style={{ fontSize: 11 }}>{fmt(p.created_at)}</td><td style={{ fontFamily: "monospace", fontSize: 11 }}>{p.order_id}</td><td style={{ fontSize: 11 }}>{p.provider}</td><td>{p.plan}</td><td>${Number(p.amount || 0).toFixed(2)}</td></tr>))}
-            {!(rev.recent_payments || []).length && <tr><td colSpan={5} style={{ color: "#64748b" }}>{t("admin_no_data")}</td></tr>}
+            {allPayments.map((p: any, i: number) => (<tr key={i}><td style={{ fontSize: 11 }}>{fmt(p.created_at)}</td><td style={{ fontFamily: "monospace", fontSize: 11 }}>{p.order_id}</td><td style={{ fontSize: 11 }}>{p.provider}</td><td>{p.plan}</td><td>${Number(p.amount || 0).toFixed(2)}</td></tr>))}
+            {!allPayments.length && <tr><td colSpan={5} style={{ color: "#64748b" }}>{t("admin_no_data")}</td></tr>}
           </tbody></table></div>
         </div>
       </div>
