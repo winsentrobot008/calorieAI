@@ -44,21 +44,21 @@ export async function POST(request: NextRequest) {
 
     const priceMap: Record<string, { price: number; label: string; description: string; metadata: Record<string, string> }> = {
       monthly: {
-        price: 999,
+        price: 100,
         label: "月付 Pro",
-        description: "CalorieAI Pro 月付订阅 — 无限次 AI 食物识别",
+        description: "CalorieAI Pro 月付订阅 ($1 测试价) — 无限次 AI 食物识别",
         metadata: { plan_type: "subscription", interval: "month", plan: "monthly" },
       },
       yearly: {
-        price: 7999,
+        price: 100,
         label: "年付 Pro",
-        description: "CalorieAI Pro 年付订阅 — 无限次 AI 食物识别，节省 33%",
+        description: "CalorieAI Pro 年付订阅 ($1 测试价) — 无限次 AI 食物识别",
         metadata: { plan_type: "subscription", interval: "year", plan: "yearly" },
       },
       permanent: {
-        price: 19900,
+        price: 100,
         label: "永久买断",
-        description: "CalorieAI 永久授权 — 终身 Pro 功能",
+        description: "CalorieAI 永久授权 ($1 测试价) — 终身 Pro 功能",
         metadata: { plan_type: "license", interval: "lifetime", plan: "permanent" },
       },
     };

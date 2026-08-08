@@ -59,9 +59,10 @@ export async function POST(request: NextRequest) {
 
     // ── Price map ─────────────────────────────────────
     const priceMap: Record<string, { amount: string; description: string }> = {
-      monthly:   { amount: "9.99",  description: "CalorieAI Pro 月付订阅" },
-      yearly:    { amount: "79.99", description: "CalorieAI Pro 年付订阅" },
-      permanent: { amount: "199.00", description: "CalorieAI 永久授权" },
+      // 统一测试价 $1.00（真机/沙箱验证用）
+      monthly:   { amount: "1.00", description: "CalorieAI Pro 月付订阅 ($1 测试价)" },
+      yearly:    { amount: "1.00", description: "CalorieAI Pro 年付订阅 ($1 测试价)" },
+      permanent: { amount: "1.00", description: "CalorieAI 永久授权 ($1 测试价)" },
     };
 
     const config = priceMap[plan];

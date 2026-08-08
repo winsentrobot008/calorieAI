@@ -189,6 +189,29 @@ body {
   letter-spacing: 0.3px;
 }
 
+/* ── Credits & Rewarded Ad ── */
+.credit-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin: 10px 0 8px;
+}
+.credit-chip {
+  font-size: 12px; font-weight: 600; color: #fbbf24;
+  background: #f59e0b22; border: 1px solid #f59e0b44;
+  border-radius: 99px; padding: 4px 12px;
+}
+.credit-pro-note { color: #34d399; }
+.ad-reward-btn {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: #fff; border: none; border-radius: 99px;
+  padding: 6px 14px; font-size: 12px; font-weight: 700; cursor: pointer;
+  transition: filter .2s;
+}
+.ad-reward-btn:hover { filter: brightness(1.15); }
+.ad-modal-body { text-align: center; padding: 20px 8px 8px; }
+.ad-modal-body p { font-size: 14px; color: var(--text-bright); margin-bottom: 16px; }
+.ad-countdown { font-size: 48px; font-weight: 800; color: #60a5fa; line-height: 1; }
+.ad-modal-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+
 /* ── Meal Type Selector ── */
 .meal-type-row { display: flex; gap: 6px; margin-bottom: 12px; }
 .meal-type-btn {

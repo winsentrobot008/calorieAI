@@ -40,6 +40,29 @@ const MOCK_TREND_DAYS = [
 // 当前部署版本标识（CEO 在页脚/日志首行可直接核对线上版本）
 const APP_VERSION = "v1.2.0 (A->B->C Vision Pipeline)";
 
+// ─── 积分 (Credits) 常量与本地存储 ────────────────────────────────────
+const CREDIT_KEY = "user_credits";
+const DEFAULT_CREDITS = 3;
+const AD_REWARD_CREDITS = 5;
+const AD_COUNTDOWN_SECONDS = 4;
+
+/** 读取积分余额：新用户首次访问自动赠送 3 积分 */
+function readCredits(): number {
+  if (typeof window === "undefined") return DEFAULT_CREDITS;
+  const raw = localStorage.getItem(CREDIT_KEY);
+  if (raw === null) {
+    localStorage.setItem(CREDIT_KEY, String(DEFAULT_CREDITS));
+    return DEFAULT_CREDITS;
+  }
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : DEFAULT_CREDITS;
+}
+
+/** 写入积分余额（不低于 0） */
+function writeCredits(value: number): void {
+  localStorage.setItem(CREDIT_KEY, String(Math.max(0, Math.floor(value))));
+}
+
 // ─── Theme Toggle ──────────────────────────────────────────────────────
 function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
@@ -47,6 +70,35 @@ function ThemeToggle() {
     <button onClick={toggleTheme} className="rounded-full p-2 transition-colors hover:bg-zinc-700/50" aria-label={t("toggle_theme")}>
       {theme === "dark" ? <Sun className="h-4 w-4 text-yellow-400" /> : <Moon className="h-4 w-4 text-zinc-400" />}
     </button>
+  );
+}
+
+// ─── Rewarded Ad Modal（模拟广告：3-5s 倒计时后发放积分） ────────────────
+function AdModal({ onClose, onReward }: { onClose: () => void; onReward: () => void }) {
+  const [countdown, setCountdown] = useState(AD_COUNTDOWN_SECONDS);
+
+  useEffect(() => {
+    if (countdown <= 0) {
+      onReward();
+      return;
+    }
+    const timer = setTimeout(() => setCountdown((c) => c - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [countdown, onReward]);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content ad-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2>{t("ad_playing_title")}</h2>
+          <button className="modal-close" onClick={onClose}><X className="h-5 w-5" /></button>
+        </div>
+        <div className="ad-modal-body">
+          <p>{t("ad_reward_plus", { count: AD_REWARD_CREDITS })}</p>
+          <div className="ad-countdown">{countdown}s</div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -198,7 +250,21 @@ function TrendChart() {
 }
 
 // ─── Meal Recorder ─────────────────────────────────────────────────────
-function MealRecorder({ addLog }: { addLog: (msg: string) => void }) {
+function MealRecorder({
+  addLog,
+  credits,
+  isPro,
+  onSpendCredit,
+  onOpenBilling,
+  onWatchAd,
+}: {
+  addLog: (msg: string) => void;
+  credits: number;
+  isPro: boolean;
+  onSpendCredit: () => void;
+  onOpenBilling: () => void;
+  onWatchAd: () => void;
+}) {
   const [mealType, setMealType] = useState("breakfast");
   const [mode, setMode] = useState<"image" | "text">("image");
   const [text, setText] = useState("");
@@ -207,6 +273,7 @@ function MealRecorder({ addLog }: { addLog: (msg: string) => void }) {
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [insufficientOpen, setInsufficientOpen] = useState(false);
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
 
@@ -227,6 +294,14 @@ function MealRecorder({ addLog }: { addLog: (msg: string) => void }) {
   // 手动触发识图：仅在用户点击【开始 AI 识图】且已有预览图片时调用后端 AI 接口
   const handleAnalyze = async () => {
     if (!previewUrl || !selectedFile) return;
+
+    // 积分门槛：Pro 用户无限次免扣；普通用户需至少 1 积分
+    if (!isPro && credits < 1) {
+      setInsufficientOpen(true);
+      addLog("[Credits] 积分不足，已拦截识图请求");
+      return;
+    }
+
     setAnalyzing(true); setResult(null);
     addLog(`[AI] 开始识图: ${selectedFile.name} (${(selectedFile.size / 1024).toFixed(1)} KB)`);
 
@@ -250,6 +325,12 @@ function MealRecorder({ addLog }: { addLog: (msg: string) => void }) {
         data.records?.forEach((rec: any) => {
           addLog(`  ${rec.food} — ${rec.calories} kcal (P${rec.protein_g}/F${rec.fat_g}/C${rec.carbs_g})`);
         });
+
+        // 识别成功后自动扣除 1 积分（Pro 用户无限次，免扣）
+        if (!isPro) {
+          onSpendCredit();
+          addLog("[Credits] 识别成功，扣除 1 积分");
+        }
       } else {
         const err = await res.text();
         addLog(`[Error] ${err.slice(0, 100)}`);
@@ -327,6 +408,29 @@ function MealRecorder({ addLog }: { addLog: (msg: string) => void }) {
           </div>
         </div>
       </div>)}
+
+      {/* 积分不足拦截弹窗 */}
+      {insufficientOpen && (
+        <div className="modal-overlay" onClick={() => setInsufficientOpen(false)}>
+          <div className="modal-content ad-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>{t("credits_insufficient_title")}</h2>
+              <button className="modal-close" onClick={() => setInsufficientOpen(false)}><X className="h-5 w-5" /></button>
+            </div>
+            <div className="ad-modal-body">
+              <p>{t("credits_insufficient_msg")}</p>
+              <div className="ad-modal-actions">
+                <button className="btn-primary" onClick={() => { setInsufficientOpen(false); onWatchAd(); }}>
+                  {t("ad_watch_btn")}
+                </button>
+                <button className="btn-primary" onClick={() => { setInsufficientOpen(false); onOpenBilling(); }}>
+                  {t("upgrade_pro_btn")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -481,6 +585,10 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
 
   const isPaypalDemo = paypalClientId === "demo" || paypalClientId === "YOUR_PAYPAL_CLIENT_ID_HERE";
 
+  // 统一测试价 $1.00（与后端 PayPal / Stripe 价格一致）
+  const TEST_PRICE_USD = "1.00";
+  const TEST_PRICE_CNY = `¥${Math.round(1 * 7.2)}`;
+
   // 读取本地 Pro 权限状态（支付成功后由 applyProState 写入）
   useEffect(() => {
     if (typeof window !== "undefined" && localStorage.getItem("user_pro") === "true") {
@@ -633,8 +741,8 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
 
   // ── Price config ────────────────────────────────────
   const plans = [
-    { plan: "monthly", label: "月付", price: 9.99, popular: false },
-    { plan: "yearly", label: "年付", price: 79.99, popular: true },
+    { plan: "monthly", label: "月付", price: 1, popular: false },
+    { plan: "yearly", label: "年付", price: 1, popular: true },
   ];
 
   return (
@@ -677,7 +785,7 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
                 {p.popular && <div className="plan-badge">{t("billing_most_popular")}</div>}
                 <div className="plan-name">{t(p.plan === "monthly" ? "billing_monthly" : "billing_yearly")}</div>
                 <div className="plan-price">
-                  <span className="price">${p.price}</span>
+                  <span className="price">${p.price.toFixed(2)}</span>
                   <span className="period">{t(p.plan === "monthly" ? "billing_period_month" : "billing_period_year")}</span>
                 </div>
                 {p.plan === "yearly" && <div className="plan-save">{t("billing_save_yearly")}</div>}
@@ -696,7 +804,7 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
           <div className="license-section">
             <div className={`plan-card permanent-card ${selectedPlan === "permanent" ? "selected" : ""}`}>
               <div className="plan-name">{t("billing_license")}</div>
-              <div className="plan-price"><span className="price">$199</span><span className="period">{t("billing_one_time")}</span></div>
+              <div className="plan-price"><span className="price">${TEST_PRICE_USD}</span><span className="period">{t("billing_one_time")}</span></div>
               <ul className="plan-features"><li>{t("billing_features_all")}</li><li>{t("billing_features_lifetime")}</li><li>{t("billing_features_noads")}</li><li>{t("billing_features_early_access")}</li><li>{t("billing_features_free_updates")}</li></ul>
               <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", margin: "4px 0 12px" }}>{t("billing_license_value")}</div>
               <button className="btn-primary plan-btn btn-license" onClick={() => handleSelectPlan("permanent")}>
@@ -759,9 +867,9 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
                 </span>
               ) : (
                 <>
-                  {paymentMethod === "card" && t("billing_pay_btn_card", { amount: `$${selectedPlan === "monthly" ? "9.99" : selectedPlan === "yearly" ? "79.99" : "199.00"}` })}
-                  {paymentMethod === "alipay" && t("billing_pay_btn_alipay", { amount: `¥${selectedPlan === "monthly" ? (9.99 * 7.2).toFixed(0) : selectedPlan === "yearly" ? (79.99 * 7.2).toFixed(0) : (199 * 7.2).toFixed(0)}` })}
-                  {paymentMethod === "wechat_pay" && t("billing_pay_btn_wechat", { amount: `¥${selectedPlan === "monthly" ? (9.99 * 7.2).toFixed(0) : selectedPlan === "yearly" ? (79.99 * 7.2).toFixed(0) : (199 * 7.2).toFixed(0)}` })}
+                  {paymentMethod === "card" && t("billing_pay_btn_card", { amount: `$${TEST_PRICE_USD}` })}
+                  {paymentMethod === "alipay" && t("billing_pay_btn_alipay", { amount: TEST_PRICE_CNY })}
+                  {paymentMethod === "wechat_pay" && t("billing_pay_btn_wechat", { amount: TEST_PRICE_CNY })}
                 </>
               )}
             </button>
@@ -919,6 +1027,8 @@ export default function Home() {
   const [adminSession, setAdminSession] = useState<any>(null);
   const [mounted, setMounted] = useState(false);
   const [isPro, setIsPro] = useState(false);
+  const [credits, setCredits] = useState(DEFAULT_CREDITS);
+  const [adOpen, setAdOpen] = useState(false);
 
   const addLog = useCallback((msg: string) => {
     const ts = `[${new Date().toLocaleTimeString("zh-CN", { hour12: false })}] ${msg}`;
@@ -948,6 +1058,25 @@ export default function Home() {
     if (typeof window !== "undefined" && localStorage.getItem("user_pro") === "true") {
       setIsPro(true);
     }
+    setCredits(readCredits());
+  }, []);
+
+  // 广告播放完成 → 发放 5 积分并刷新 UI
+  const handleAdReward = useCallback(() => {
+    const next = readCredits() + AD_REWARD_CREDITS;
+    writeCredits(next);
+    setCredits(next);
+    setAdOpen(false);
+    // 服务端记录一次奖励（best-effort，失败不影响本地发奖）
+    fetch("/api/v1/billing/ad-reward", { method: "POST" }).catch(() => {});
+    addLog(`[ADS] 广告播放完成，获得 +${AD_REWARD_CREDITS} 积分（余额 ${next}）`);
+  }, [addLog]);
+
+  // 识图成功后扣除 1 积分
+  const handleSpendCredit = useCallback(() => {
+    const next = Math.max(0, readCredits() - 1);
+    writeCredits(next);
+    setCredits(next);
   }, []);
 
   // If admin is logged in, show admin dashboard
@@ -989,11 +1118,31 @@ export default function Home() {
 
       {/* Content */}
       <main className="content">
-        {tab === "record" && <MealRecorder addLog={addLog} />}
+        {tab === "record" && (
+          <MealRecorder
+            addLog={addLog}
+            credits={credits}
+            isPro={isPro}
+            onSpendCredit={handleSpendCredit}
+            onOpenBilling={() => setShowBilling(true)}
+            onWatchAd={() => setAdOpen(true)}
+          />
+        )}
         {tab === "dashboard" && <DailyDashboard />}
         {tab === "profile" && <Profile addLog={addLog} />}
         {tab === "tts" && <TTSPanel addLog={addLog} />}
       </main>
+
+      {/* 积分栏：看广告领积分（日志栏上方） */}
+      <div className="credit-bar">
+        <span className="credit-chip">
+          🎯 {t("credits_label")}: {credits}
+          {isPro && <span className="credit-pro-note"> · {t("credits_pro_note")}</span>}
+        </span>
+        <button className="ad-reward-btn" onClick={() => setAdOpen(true)}>
+          📺 {t("ad_reward_btn")} (+{AD_REWARD_CREDITS})
+        </button>
+      </div>
 
       {/* Log Footer */}
       <footer className="footer">
@@ -1009,6 +1158,7 @@ export default function Home() {
       {/* Modals */}
       {showLogin && <LoginModal onClose={() => setShowLogin(false)} addLog={addLog} />}
       {showBilling && <BillingModal onClose={() => setShowBilling(false)} addLog={addLog} />}
+      {adOpen && <AdModal onClose={() => setAdOpen(false)} onReward={handleAdReward} />}
     </div>
   );
 }
