@@ -1,4 +1,7 @@
 {
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "installCommand": "npm install",
   "functions": {
     "src/app/api/tts/route.ts": {
       "maxDuration": 30
