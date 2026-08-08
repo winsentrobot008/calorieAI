@@ -74,6 +74,9 @@ interface BillingStoreData {
 const DATA_DIR = path.join(os.tmpdir(), "calorieai-data");
 const DATA_FILE = path.join(DATA_DIR, "subscriptions.json");
 
+// 进程内支付流水（内存 analytics）：与文件双写，保证本实例内统计即时可见
+const memoryPayments: PaymentRecord[] = [];
+
 // ─── Helpers ──────────────────────────────────────────────────────────
 
 function ensureDataDir(): void {
@@ -246,7 +249,10 @@ export function recordPayment(input: {
   email?: string;
 }): PaymentRecord | null {
   const store = readStore();
-  if (store.payments.some((p) => p.order_id === input.orderId)) {
+  if (
+    store.payments.some((p) => p.order_id === input.orderId) ||
+    memoryPayments.some((p) => p.order_id === input.orderId)
+  ) {
     return null; // 已入账，幂等跳过
   }
 
@@ -262,7 +268,9 @@ export function recordPayment(input: {
   };
 
   store.payments.push(record);
+  memoryPayments.push(record);
   if (store.payments.length > 2000) store.payments = store.payments.slice(-2000);
+  if (memoryPayments.length > 2000) memoryPayments.splice(0, memoryPayments.length - 2000);
   writeStore(store);
   return record;
 }
@@ -279,7 +287,13 @@ export function getPaymentStats(): {
   recent_payments: PaymentRecord[];
 } {
   const store = readStore();
-  const payments = store.payments || [];
+  // 文件 + 内存合并（按 order_id 去重），保证同一实例内最新入账立即可见
+  const merged = new Map<string, PaymentRecord>();
+  for (const p of store.payments || []) merged.set(p.order_id, p);
+  for (const p of memoryPayments) {
+    if (!merged.has(p.order_id)) merged.set(p.order_id, p);
+  }
+  const payments = Array.from(merged.values());
   let total = 0;
   let subscription = 0;
   let license = 0;

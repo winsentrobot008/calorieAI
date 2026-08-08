@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { CheckCircle, XCircle, Loader2 } from "lucide-react";
 import { t, useLocale } from "@/lib/i18n";
+import { recordLocalPayment, addCredits, PAYMENT_CREDIT_BONUS } from "@/lib/local-store";
 
 function BillingSuccessContent() {
   useLocale();
@@ -18,6 +19,15 @@ function BillingSuccessContent() {
       localStorage.setItem("user_pro", "true");
       localStorage.setItem("user_plan", planName || "monthly");
       localStorage.setItem("user_pro_activated_at", new Date().toISOString());
+      // 充值奖励：购买 $1.00 方案 +10 积分；记录本机支付流水供管理员后台合并展示
+      recordLocalPayment({
+        orderId: searchParams.get("session_id") || `stripe_${Date.now()}`,
+        provider: "stripe",
+        plan: planName || "monthly",
+        amount: 1.0,
+      });
+      const next = addCredits(PAYMENT_CREDIT_BONUS);
+      console.log(`[BillingSuccess] 充值奖励 +${PAYMENT_CREDIT_BONUS} 积分，余额 ${next}`);
     } catch (err) {
       console.error("[BillingSuccess] localStorage 写入失败:", err);
     }

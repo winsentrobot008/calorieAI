@@ -6,6 +6,17 @@ import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
 import { Sun, Moon, Mic, X } from "lucide-react";
 import { t, useLocale } from "@/lib/i18n";
 import LocaleSwitcher from "@/components/locale-switcher";
+import {
+  readCredits,
+  writeCredits,
+  addCredits,
+  recordLocalPayment,
+  localPaymentStats,
+  AD_REWARD_CREDITS,
+  AD_COUNTDOWN_SECONDS,
+  PAYMENT_CREDIT_BONUS,
+  DEFAULT_CREDITS,
+} from "@/lib/local-store";
 
 // ─── Constants ────────────────────────────────────────────────────────
 const API = "/api";
@@ -39,29 +50,6 @@ const MOCK_TREND_DAYS = [
 
 // 当前部署版本标识（CEO 在页脚/日志首行可直接核对线上版本）
 const APP_VERSION = "v1.2.0 (A->B->C Vision Pipeline)";
-
-// ─── 积分 (Credits) 常量与本地存储 ────────────────────────────────────
-const CREDIT_KEY = "user_credits";
-const DEFAULT_CREDITS = 3;
-const AD_REWARD_CREDITS = 5;
-const AD_COUNTDOWN_SECONDS = 4;
-
-/** 读取积分余额：新用户首次访问自动赠送 3 积分 */
-function readCredits(): number {
-  if (typeof window === "undefined") return DEFAULT_CREDITS;
-  const raw = localStorage.getItem(CREDIT_KEY);
-  if (raw === null) {
-    localStorage.setItem(CREDIT_KEY, String(DEFAULT_CREDITS));
-    return DEFAULT_CREDITS;
-  }
-  const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : DEFAULT_CREDITS;
-}
-
-/** 写入积分余额（不低于 0） */
-function writeCredits(value: number): void {
-  localStorage.setItem(CREDIT_KEY, String(Math.max(0, Math.floor(value))));
-}
 
 // ─── Theme Toggle ──────────────────────────────────────────────────────
 function ThemeToggle() {
@@ -571,7 +559,15 @@ const PAYMENT_METHODS: {
   { id: "paypal",     label: "PayPal",           labelEn: "PayPal",              icon: "🅿️", description: "PayPal 账户支付", provider: "paypal" },
 ];
 
-function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: string) => void }) {
+function BillingModal({
+  onClose,
+  addLog,
+  onPaymentSuccess,
+}: {
+  onClose: () => void;
+  addLog: (msg: string) => void;
+  onPaymentSuccess: () => void;
+}) {
   const [activeTab, setActiveTab] = useState("subscription");
   const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodType | null>(null);
@@ -607,6 +603,14 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
     localStorage.setItem("user_pro_activated_at", new Date().toISOString());
     setIsPro(true);
     addLog(`[BILLING] Pro 权限已激活并写入本地状态: plan=${plan}`);
+  };
+
+  // 支付完成统一处理：升级 Pro + 本地记录 $1.00 流水 + 充值奖励 10 积分
+  const finishPayment = (plan: string, provider: "stripe" | "paypal", orderId?: string) => {
+    applyProState(plan);
+    recordLocalPayment({ orderId: orderId || `pay_${Date.now()}`, provider, plan, amount: 1.0 });
+    onPaymentSuccess();
+    addLog(`[BILLING] 支付完成: ${plan}（${provider}）入账 $1.00，+${PAYMENT_CREDIT_BONUS} 积分`);
   };
 
   // ── Select plan → reset payment method ──────────────
@@ -645,7 +649,7 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
       }
 
       if (data.mock) {
-        applyProState(selectedPlan);
+        finishPayment(selectedPlan, "stripe", data.sessionId);
         setMessage(`✅ 演示模式 — ${selectedPlan} 购买成功`);
         addLog(`[Stripe] 演示模式: ${selectedPlan} 购买成功`);
         setLoading(false);
@@ -700,7 +704,7 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
       if (!res.ok) throw new Error(capture.error || t("paypal_error_capture"));
       if (capture.mock) {
         addLog(`[PayPal] 演示模式: 捕获成功 (模拟)`);
-        applyProState(selectedPlan || "monthly");
+        finishPayment(selectedPlan || "monthly", "paypal", data.orderID);
         setMessage(`✅ 演示模式 — ${selectedPlan} 购买成功，Pro 权限已激活`);
         return;
       }
@@ -711,7 +715,7 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
         const email = getUserEmail();
         if (capture.pro) {
           // capture 路由已在服务端激活订阅，前端只需同步本地 Pro 状态
-          applyProState(selectedPlan || "monthly");
+          finishPayment(selectedPlan || "monthly", "paypal", data.orderID);
           addLog(`[PayPal] 服务端订阅已激活: userId=${userId}, plan=${selectedPlan}`);
         } else {
           // 兜底：服务端激活失败时手动调用订阅接口
@@ -719,7 +723,7 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
             `/api/v1/billing/subscribe?plan=${selectedPlan}&user_id=${encodeURIComponent(userId)}&email=${encodeURIComponent(email)}&provider=paypal&order_id=${data.orderID}`,
             { method: "POST" }
           );
-          applyProState(selectedPlan || "monthly");
+          finishPayment(selectedPlan || "monthly", "paypal", data.orderID);
           addLog(`[PayPal] 订阅已通过备用接口激活: userId=${userId}, plan=${selectedPlan}`);
         }
         setMessage(`✅ 支付成功! ${selectedPlan} 方案 Pro 权限已激活 🎉`);
@@ -892,7 +896,7 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
                 style={{ width: "100%", padding: "12px 0", fontSize: 15 }}
                 onClick={() => {
                   addLog(`[PayPal Demo] 模拟支付成功: ${selectedPlan}`);
-                  applyProState(selectedPlan || "monthly");
+                  finishPayment(selectedPlan || "monthly", "paypal");
                   setMessage(`✅ 演示模式 — ${selectedPlan} 购买成功，Pro 权限已激活`);
                 }}
               >
@@ -1017,11 +1021,16 @@ function AdminDashboardPage({ session, onLogout }: { session: any; onLogout: () 
   const rev = data.revenue || {};
   const tr = data.traffic || {};
   const fmt = (ts?: string) => (ts ? ts.slice(0, 19).replace("T", " ") : "-");
+  // 合并本机支付流水（localStorage），保证支付成功后后台 100% 看到 $1.00 增量
+  const localPay = localPaymentStats();
+  const mergedRevenue = Number(rev.total_revenue || 0) + localPay.total;
+  const mergedSubs = (o.active_subscriptions || 0) + localPay.count;
+  const mergedInvoices = (rev.invoice_count || 0) + localPay.count;
 
   function TabContent() {
     if (tab === "overview") return (<div className="admin-overview-grid">
-      <div className="admin-stat-card" style={{ borderLeft: "3px solid #f59e0b" }}><div className="admin-stat-label">{t("admin_total_revenue")}</div><div className="admin-stat-value">${Number(o.total_revenue || 0).toFixed(2)}</div><div className="admin-stat-sub">{t("admin_invoices")}: {rev.invoice_count ?? 0}</div></div>
-      <div className="admin-stat-card" style={{ borderLeft: "3px solid #34d399" }}><div className="admin-stat-label">{t("admin_active_subscriptions")}</div><div className="admin-stat-value">{o.active_subscriptions ?? 0}</div><div className="admin-stat-sub">{t("billing_permanent")}: {o.permanent_licenses ?? 0}</div></div>
+      <div className="admin-stat-card" style={{ borderLeft: "3px solid #f59e0b" }}><div className="admin-stat-label">{t("admin_total_revenue")}</div><div className="admin-stat-value">${mergedRevenue.toFixed(2)}</div><div className="admin-stat-sub">{t("admin_invoices")}: {mergedInvoices}</div></div>
+      <div className="admin-stat-card" style={{ borderLeft: "3px solid #34d399" }}><div className="admin-stat-label">{t("admin_active_subscriptions")}</div><div className="admin-stat-value">{mergedSubs}</div><div className="admin-stat-sub">{t("billing_permanent")}: {o.permanent_licenses ?? 0} · 本机流水 {localPay.count} 笔</div></div>
       <div className="admin-stat-card" style={{ borderLeft: "3px solid #60a5fa" }}><div className="admin-stat-label">{t("admin_total_users")}</div><div className="admin-stat-value">{o.total_users ?? 0}</div><div className="admin-stat-sub">{t("admin_total_visits")}: {o.total_visits ?? 0}</div></div>
       <div className="admin-stat-card" style={{ borderLeft: "3px solid #a78bfa" }}><div className="admin-stat-label">{t("admin_today_recognitions")}</div><div className="admin-stat-value">{o.today_recognitions ?? 0}</div><div className="admin-stat-sub">{t("admin_model_calls")}: {o.model_calls ?? 0}</div></div>
       <div className="admin-stat-card" style={{ borderLeft: "3px solid #ef4444" }}><div className="admin-stat-label">{t("admin_error_rate")}</div><div className="admin-stat-value">{(o.error_rate_pct ?? 0)}%</div><div className="admin-stat-sub">{t("admin_model_errors")}: {o.model_errors ?? 0}</div></div>
@@ -1068,7 +1077,7 @@ function AdminDashboardPage({ session, onLogout }: { session: any; onLogout: () 
     if (tab === "revenue") return (
       <div>
         <div className="admin-overview-grid">
-          <div className="admin-stat-card" style={{ borderLeft: "3px solid #f59e0b" }}><div className="admin-stat-label">{t("admin_total_revenue")}</div><div className="admin-stat-value">${Number(rev.total_revenue || 0).toFixed(2)}</div><div className="admin-stat-sub">{t("admin_invoices")}: {rev.invoice_count ?? 0}</div></div>
+          <div className="admin-stat-card" style={{ borderLeft: "3px solid #f59e0b" }}><div className="admin-stat-label">{t("admin_total_revenue")}</div><div className="admin-stat-value">${mergedRevenue.toFixed(2)}</div><div className="admin-stat-sub">{t("admin_invoices")}: {mergedInvoices}</div></div>
           <div className="admin-stat-card" style={{ borderLeft: "3px solid #60a5fa" }}><div className="admin-stat-label">{t("admin_subscription_revenue")}</div><div className="admin-stat-value">${Number(rev.breakdown?.subscription || 0).toFixed(2)}</div></div>
           <div className="admin-stat-card" style={{ borderLeft: "3px solid #a78bfa" }}><div className="admin-stat-label">{t("admin_license_revenue")}</div><div className="admin-stat-value">${Number(rev.breakdown?.license || 0).toFixed(2)}</div></div>
         </div>
@@ -1170,8 +1179,7 @@ export default function Home() {
 
   // 广告播放完成 → 发放 5 积分并刷新 UI
   const handleAdReward = useCallback(() => {
-    const next = readCredits() + AD_REWARD_CREDITS;
-    writeCredits(next);
+    const next = addCredits(AD_REWARD_CREDITS);
     setCredits(next);
     setAdOpen(false);
     // 服务端记录一次奖励（best-effort，失败不影响本地发奖）
@@ -1185,6 +1193,13 @@ export default function Home() {
     writeCredits(next);
     setCredits(next);
   }, []);
+
+  // 支付完成充值奖励：购买 $1.00 方案直接获得 10 积分（Pro 无限积分叠加入账）
+  const handlePaymentSuccess = useCallback(() => {
+    const next = addCredits(PAYMENT_CREDIT_BONUS);
+    setCredits(next);
+    addLog(`[BILLING] 充值奖励: +${PAYMENT_CREDIT_BONUS} 积分（余额 ${next}）`);
+  }, [addLog]);
 
   // 管理员登录态：pending 仅表示打开登录页；完整 session 才进入后台
   if (adminSession && !adminSession.pending) {
@@ -1253,12 +1268,6 @@ export default function Home() {
 
       {/* Log Footer */}
       <footer className="footer">
-        <div className="log-bar">
-          <span className="log-label">{t("log_label")}</span>
-          <div className="log-scroll">
-            {logs.map((l, i) => (<div key={i} className="log-line">{l}</div>))}
-          </div>
-        </div>
         <div className="version-bar">
           <span>Version: {APP_VERSION}</span>
           <button className="admin-entry" onClick={() => setAdminSession({ pending: true })}>{t("admin_entry")}</button>
@@ -1267,7 +1276,7 @@ export default function Home() {
 
       {/* Modals */}
       {showLogin && <LoginModal onClose={() => setShowLogin(false)} addLog={addLog} />}
-      {showBilling && <BillingModal onClose={() => setShowBilling(false)} addLog={addLog} />}
+      {showBilling && <BillingModal onClose={() => setShowBilling(false)} addLog={addLog} onPaymentSuccess={handlePaymentSuccess} />}
       {adOpen && <AdModal onClose={() => setAdOpen(false)} onReward={handleAdReward} />}
     </div>
   );
