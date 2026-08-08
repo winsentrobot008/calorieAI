@@ -29,7 +29,13 @@ import { NextRequest, NextResponse } from "next/server";
  *       carbs_g: number,       // 碳水 (g)
  *       confidence: number | null
  *     }>,
- *     model: { provider: string, switched: boolean, attempts: number }
+ *     model: {
+ *       provider: string,   // 命中提供商: gemini | openrouter | deepseek
+ *       model: string,      // 实际使用的模型 ID（如 gemini-2.0-flash / openai/gpt-4o-mini）
+ *       label: string,      // 展示名（如 "Gemini (gemini-2.0-flash)" / "OpenRouter (gpt-4o-mini)"）
+ *       switched: boolean,  // 是否为回退提供商命中
+ *       attempts: number    // 实际尝试过的提供商数量
+ *     }
  *   }
  *
  * 如果均未配置或全部调用失败，返回明确错误（NO_VISION_KEY / VISION_PROVIDER_ERROR），
@@ -85,6 +91,8 @@ export async function POST(request: NextRequest) {
       attempted += 1;
       try {
         const result = await provider.analyze(apiKey);
+        // 服务端日志显式记录命中提供商与模型名
+        console.log(`[Vision] 识别成功，命中提供商: ${result.model.label}（attempts=${attempted}）`);
         // 统一附上回退元数据：switched=true 表示实际由备用提供商完成识别
         return NextResponse.json({
           ...result,
@@ -125,13 +133,25 @@ type ProviderName = "gemini" | "openrouter" | "deepseek";
 interface AnalysisResult {
   count: number;
   records: any[];
-  model: { provider: ProviderName; switched: boolean };
+  model: { provider: ProviderName; model: string; label: string; switched: boolean };
 }
 
 interface VisionProvider {
   name: ProviderName;
   apiKey: string | undefined;
   analyze: (apiKey: string) => Promise<AnalysisResult>;
+}
+
+const PROVIDER_DISPLAY: Record<ProviderName, string> = {
+  gemini: "Gemini",
+  openrouter: "OpenRouter",
+  deepseek: "DeepSeek",
+};
+
+/** 生成前端可直接展示的模型名，如 "Gemini (gemini-2.0-flash)" / "OpenRouter (gpt-4o-mini)" */
+function buildModelLabel(provider: ProviderName, model: string): string {
+  const shortModel = provider === "openrouter" ? model.split("/").pop() || model : model;
+  return `${PROVIDER_DISPLAY[provider]} (${shortModel})`;
 }
 
 /** 构造统一的识图提示词（要求返回含食物名称/重量/卡路里/蛋白质/脂肪/碳水的 JSON 数组） */
@@ -177,7 +197,11 @@ async function analyzeWithGemini(
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "[]";
   const records = parseRecords(text);
 
-  return { count: records.length, records, model: { provider: "gemini", switched: false } };
+  return {
+    count: records.length,
+    records,
+    model: { provider: "gemini", model, label: buildModelLabel("gemini", model), switched: false },
+  };
 }
 
 /** OpenAI 兼容接口（供 OpenRouter / DeepSeek 复用） */
@@ -218,7 +242,16 @@ async function analyzeWithOpenAICompatible(
   const text = data?.choices?.[0]?.message?.content || "[]";
   const records = parseRecords(text);
 
-  return { count: records.length, records, model: { provider: options.provider, switched: false } };
+  return {
+    count: records.length,
+    records,
+    model: {
+      provider: options.provider,
+      model: options.model,
+      label: buildModelLabel(options.provider, options.model),
+      switched: false,
+    },
+  };
 }
 
 /** B: OpenRouter（聚合多模型，OpenAI 兼容接口） */

@@ -37,6 +37,9 @@ const MOCK_TREND_DAYS = [
   { date: "2026-07-24", calories: 541, protein_g: 52.8, fat_g: 6.3, carbs_g: 65, goal_calories: 2000, weekday: "今天", meal_types: { breakfast: 260, lunch: 281, dinner: 0, snack: 0 } },
 ];
 
+// 当前部署版本标识（CEO 在页脚/日志首行可直接核对线上版本）
+const APP_VERSION = "v1.2.0 (A->B->C Vision Pipeline)";
+
 // ─── Theme Toggle ──────────────────────────────────────────────────────
 function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
@@ -240,6 +243,9 @@ function MealRecorder({ addLog }: { addLog: (msg: string) => void }) {
       if (res.ok) {
         const data = await res.json();
         setResult(data.records || []);
+        // 日志面板直接打印命中模型名（例如 "Gemini (gemini-2.0-flash)"）
+        const modelLabel = data.model?.label || (data.model ? `${data.model.provider} (${data.model.model || "unknown"})` : "");
+        if (modelLabel) addLog(`[AI] 识别模型: ${modelLabel}`);
         addLog(`[AI] 识别到 ${data.count} 种食物`);
         data.records?.forEach((rec: any) => {
           addLog(`  ${rec.food} — ${rec.calories} kcal (P${rec.protein_g}/F${rec.fat_g}/C${rec.carbs_g})`);
@@ -872,7 +878,7 @@ export default function Home() {
   // Re-render the whole tree on language switch so every t() call updates.
   useLocale();
   const [tab, setTab] = useState("record");
-  const [logs, setLogs] = useState(["[System] CalorieAI 已就绪"]);
+  const [logs, setLogs] = useState([`[System] CalorieAI 已就绪 · Version: ${APP_VERSION}`]);
   const [showLogin, setShowLogin] = useState(false);
   const [showBilling, setShowBilling] = useState(false);
   const [adminSession, setAdminSession] = useState<any>(null);
@@ -956,6 +962,7 @@ export default function Home() {
             {logs.map((l, i) => (<div key={i} className="log-line">{l}</div>))}
           </div>
         </div>
+        <div className="version-bar">Version: {APP_VERSION}</div>
       </footer>
 
       {/* Modals */}

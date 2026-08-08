@@ -177,6 +177,13 @@ body {
   font-size: 10px; color: #4a5568; font-family: monospace;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.version-bar {
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--text-dim);
+  text-align: center;
+  letter-spacing: 0.3px;
+}
 
 /* ── Meal Type Selector ── */
 .meal-type-row { display: flex; gap: 6px; margin-bottom: 12px; }
