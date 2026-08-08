@@ -474,15 +474,32 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [paypalKey, setPaypalKey] = useState(0);
+  const [isPro, setIsPro] = useState(false);
 
   const paypalClientId =
     process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID || "demo";
 
   const isPaypalDemo = paypalClientId === "demo" || paypalClientId === "YOUR_PAYPAL_CLIENT_ID_HERE";
 
+  // 读取本地 Pro 权限状态（支付成功后由 applyProState 写入）
+  useEffect(() => {
+    if (typeof window !== "undefined" && localStorage.getItem("user_pro") === "true") {
+      setIsPro(true);
+    }
+  }, []);
+
   // 获取当前用户信息
   const getUserId = () => typeof window !== "undefined" ? localStorage.getItem("user_id") || "anonymous" : "anonymous";
   const getUserEmail = () => typeof window !== "undefined" ? localStorage.getItem("user_email") || "" : "";
+
+  // 支付成功后：写入本地 Pro 权限并刷新用户状态
+  const applyProState = (plan: string) => {
+    localStorage.setItem("user_pro", "true");
+    localStorage.setItem("user_plan", plan);
+    localStorage.setItem("user_pro_activated_at", new Date().toISOString());
+    setIsPro(true);
+    addLog(`[BILLING] Pro 权限已激活并写入本地状态: plan=${plan}`);
+  };
 
   // ── Select plan → reset payment method ──────────────
   const handleSelectPlan = (plan: string) => {
@@ -520,6 +537,7 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
       }
 
       if (data.mock) {
+        applyProState(selectedPlan);
         setMessage(`✅ 演示模式 — ${selectedPlan} 购买成功`);
         addLog(`[Stripe] 演示模式: ${selectedPlan} 购买成功`);
         setLoading(false);
@@ -563,28 +581,40 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
       const res = await fetch("/api/paypal/capture-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ orderId: data.orderID }),
+        body: JSON.stringify({
+          orderId: data.orderID,
+          user_id: getUserId(),
+          email: getUserEmail(),
+          plan: selectedPlan,
+        }),
       });
       const capture = await res.json();
       if (!res.ok) throw new Error(capture.error || t("paypal_error_capture"));
       if (capture.mock) {
         addLog(`[PayPal] 演示模式: 捕获成功 (模拟)`);
-        setMessage(`✅ 演示模式 — ${selectedPlan} 购买成功`);
+        applyProState(selectedPlan || "monthly");
+        setMessage(`✅ 演示模式 — ${selectedPlan} 购买成功，Pro 权限已激活`);
         return;
       }
       if (capture.status === "COMPLETED") {
         addLog(`[PayPal] 支付成功! 订单 ${capture.id}, 金额 $${capture.amount?.value || "?"}`);
 
-        // 通过订阅 API 激活用户权限
-        const userId = localStorage.getItem("user_id") || `paypal_${data.orderID}`;
-        const email = localStorage.getItem("user_email") || "";
-
-        await fetch(`/api/v1/billing/subscribe?plan=${selectedPlan}&user_id=${encodeURIComponent(userId)}&email=${encodeURIComponent(email)}&provider=paypal&order_id=${data.orderID}`, {
-          method: "POST",
-        });
-
-        setMessage(`✅ 支付成功! 感谢订阅 ${selectedPlan} 🎉`);
-        addLog(`[PayPal] 订阅已激活: userId=${userId}, plan=${selectedPlan}`);
+        const userId = getUserId();
+        const email = getUserEmail();
+        if (capture.pro) {
+          // capture 路由已在服务端激活订阅，前端只需同步本地 Pro 状态
+          applyProState(selectedPlan || "monthly");
+          addLog(`[PayPal] 服务端订阅已激活: userId=${userId}, plan=${selectedPlan}`);
+        } else {
+          // 兜底：服务端激活失败时手动调用订阅接口
+          await fetch(
+            `/api/v1/billing/subscribe?plan=${selectedPlan}&user_id=${encodeURIComponent(userId)}&email=${encodeURIComponent(email)}&provider=paypal&order_id=${data.orderID}`,
+            { method: "POST" }
+          );
+          applyProState(selectedPlan || "monthly");
+          addLog(`[PayPal] 订阅已通过备用接口激活: userId=${userId}, plan=${selectedPlan}`);
+        }
+        setMessage(`✅ 支付成功! ${selectedPlan} 方案 Pro 权限已激活 🎉`);
       } else {
         addLog(`[PayPal] 支付状态异常: ${capture.status}`);
         setMessage(`⚠️ 支付状态: ${capture.status}`);
@@ -615,7 +645,11 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
           <button className="modal-close" onClick={onClose}><X className="h-5 w-5" /></button>
         </div>
         <div className="billing-status-bar">
-          <span className="badge badge-free">{t("billing_free_user")}</span>
+          <span className={`badge ${isPro ? "badge-pro" : "badge-free"}`}>
+            {isPro
+              ? t("billing_pro_user", { plan: (typeof window !== "undefined" ? localStorage.getItem("user_plan") : null) || "monthly" })
+              : t("billing_free_user")}
+          </span>
         </div>
         {message && <div className="billing-message">{message}</div>}
 
@@ -750,7 +784,8 @@ function BillingModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: 
                 style={{ width: "100%", padding: "12px 0", fontSize: 15 }}
                 onClick={() => {
                   addLog(`[PayPal Demo] 模拟支付成功: ${selectedPlan}`);
-                  setMessage(`✅ 演示模式 — ${selectedPlan} 购买成功`);
+                  applyProState(selectedPlan || "monthly");
+                  setMessage(`✅ 演示模式 — ${selectedPlan} 购买成功，Pro 权限已激活`);
                 }}
               >
                 {t("billing_paypal_demo")}
@@ -883,6 +918,7 @@ export default function Home() {
   const [showBilling, setShowBilling] = useState(false);
   const [adminSession, setAdminSession] = useState<any>(null);
   const [mounted, setMounted] = useState(false);
+  const [isPro, setIsPro] = useState(false);
 
   const addLog = useCallback((msg: string) => {
     const ts = `[${new Date().toLocaleTimeString("zh-CN", { hour12: false })}] ${msg}`;
@@ -909,6 +945,9 @@ export default function Home() {
   // 挂载后才读取 localStorage 中的 user_email, 避免 React #418 (DOM 文本不一致)。
   useEffect(() => {
     setMounted(true);
+    if (typeof window !== "undefined" && localStorage.getItem("user_pro") === "true") {
+      setIsPro(true);
+    }
   }, []);
 
   // If admin is logged in, show admin dashboard
@@ -926,7 +965,9 @@ export default function Home() {
         </div>
         <div className="header-right">
           <span className="daily-target">{t("daily_target_label", { calories: 2000 })}</span>
-          <button className="btn-upgrade" onClick={() => setShowBilling(true)}>{t("pro_badge")}</button>
+          <button className={`btn-upgrade ${isPro ? "btn-upgrade-active" : ""}`} onClick={() => setShowBilling(true)}>
+            {isPro ? t("pro_active_badge") : t("pro_badge")}
+          </button>
           <button className="btn-login" onClick={() => setShowLogin(true)}>
             {mounted ? localStorage.getItem("user_email")?.split("@")[0] || t("login_title") : t("login_title")}
           </button>

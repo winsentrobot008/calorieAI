@@ -8,6 +8,7 @@
   "daily_target": "{calories} kcal/day",
   "permanent_badge": "Lifetime",
   "pro_badge": "Pro",
+  "pro_active_badge": "Pro ✓",
   "goal_lose": "Lose",
   "goal_gain": "Gain",
   "goal_maintain": "Maintain",
@@ -83,6 +84,7 @@
 
   "billing_upgrade_pro": "Upgrade to Pro",
   "billing_free_user": "Free Tier — 3 free recognitions/day",
+  "billing_pro_user": "Pro User — {plan} activated",
   "billing_subscription": "Subscription",
   "billing_license": "Lifetime License",
   "billing_monthly": "Monthly",

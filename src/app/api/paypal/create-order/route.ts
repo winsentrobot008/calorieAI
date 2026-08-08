@@ -44,11 +44,16 @@ export async function POST(request: NextRequest) {
     const { plan } = body;
 
     // ── Demo / Mock mode ──────────────────────────────
-    if (!PAYPAL_CLIENT_ID || PAYPAL_CLIENT_ID === "YOUR_PAYPAL_CLIENT_ID_HERE") {
+    if (
+      !PAYPAL_CLIENT_ID ||
+      PAYPAL_CLIENT_ID === "YOUR_PAYPAL_CLIENT_ID_HERE" ||
+      !PAYPAL_CLIENT_SECRET ||
+      PAYPAL_CLIENT_SECRET === "YOUR_PAYPAL_CLIENT_SECRET_HERE"
+    ) {
       return NextResponse.json({
         id: `ORDER_MOCK_${Date.now()}`,
         mock: true,
-        message: "演示模式：未配置真实 PayPal 密钥。设置 PAYPAL_CLIENT_ID 和 PAYPAL_CLIENT_SECRET 启用真实支付。",
+        message: "演示模式：未配置完整的 PayPal 密钥。设置 PAYPAL_CLIENT_ID 和 PAYPAL_CLIENT_SECRET 启用真实支付。",
       });
     }
 
@@ -99,7 +104,7 @@ export async function POST(request: NextRequest) {
                   value: config.amount,
                 },
                 quantity: "1",
-                category: plan === "permanent" ? "DIGITAL_GOODS" : "DIGITAL_GOODS",
+                category: "DIGITAL_GOODS",
               },
             ],
           },

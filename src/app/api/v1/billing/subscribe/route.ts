@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { upsertSubscription } from "@/lib/billing-store";
+import { activateSubscription } from "@/lib/billing-activate";
 
 /**
  * POST /api/v1/billing/subscribe?plan=monthly&user_id=xxx&email=xxx&provider=paypal&order_id=xxx
@@ -24,29 +24,12 @@ export async function POST(request: NextRequest) {
     }
 
     const effectiveUserId = userId || email || `paypal_${orderId || Date.now()}`;
-    const isPermanent = plan === "permanent";
-
-    // 计算到期时间
-    const now = new Date();
-    let periodEnd: Date;
-    if (isPermanent) {
-      periodEnd = new Date("2099-12-31T23:59:59Z");
-    } else if (plan === "yearly") {
-      periodEnd = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate());
-    } else {
-      periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, now.getDate());
-    }
-
-    const record = upsertSubscription(effectiveUserId, {
+    const record = activateSubscription({
+      userId: effectiveUserId,
       email: email || "",
-      plan_type: isPermanent ? "license" : "subscription",
       plan: plan as "monthly" | "yearly" | "permanent",
-      is_active: true,
-      is_permanent: isPermanent,
-      paypal_order_id: orderId || undefined,
       provider: provider as "stripe" | "paypal",
-      current_period_start: now.toISOString(),
-      current_period_end: periodEnd.toISOString(),
+      orderId: orderId || undefined,
     });
 
     return NextResponse.json({

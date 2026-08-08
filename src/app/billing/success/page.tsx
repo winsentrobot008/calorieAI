@@ -12,12 +12,24 @@ function BillingSuccessContent() {
   const [status, setStatus] = useState<"verifying" | "success" | "error">("verifying");
   const [message, setMessage] = useState("");
 
+  // 支付成功后同步本地 Pro 权限（localStorage），供首页/订阅弹窗直接读取
+  const applyLocalPro = (planName: string | null) => {
+    try {
+      localStorage.setItem("user_pro", "true");
+      localStorage.setItem("user_plan", planName || "monthly");
+      localStorage.setItem("user_pro_activated_at", new Date().toISOString());
+    } catch (err) {
+      console.error("[BillingSuccess] localStorage 写入失败:", err);
+    }
+  };
+
   useEffect(() => {
     const sessionId = searchParams.get("session_id");
     const plan = searchParams.get("plan");
     const isMock = searchParams.get("mock") === "true";
 
     if (isMock) {
+      applyLocalPro(plan);
       setStatus("success");
       setMessage(t("billing_success_mock", { plan: plan || t("billing_monthly") }));
       return;
@@ -34,15 +46,18 @@ function BillingSuccessContent() {
       .then((res) => res.json())
       .then((data) => {
         if (data.is_premium) {
+          applyLocalPro(plan);
           setStatus("success");
           setMessage(t("billing_success_activated"));
         } else {
           // 支付可能还在处理中，Webhook 尚未触发
+          applyLocalPro(plan);
           setStatus("success");
           setMessage(t("billing_success_pending"));
         }
       })
       .catch(() => {
+        applyLocalPro(plan);
         setStatus("success");
         setMessage(t("billing_success_thanks"));
       });

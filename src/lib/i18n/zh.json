@@ -8,6 +8,7 @@
   "daily_target": "{calories} kcal/日",
   "permanent_badge": "永久",
   "pro_badge": "Pro",
+  "pro_active_badge": "Pro ✓",
   "goal_lose": "减脂",
   "goal_gain": "增肌",
   "goal_maintain": "维持",
@@ -83,6 +84,7 @@
 
   "billing_upgrade_pro": "升级到 Pro",
   "billing_free_user": "免费用户 — 每日 3 次免费识别",
+  "billing_pro_user": "Pro 用户 — {plan} 已激活",
   "billing_subscription": "订阅方案",
   "billing_license": "永久买断",
   "billing_monthly": "月付",
