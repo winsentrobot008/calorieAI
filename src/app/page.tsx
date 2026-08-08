@@ -657,7 +657,7 @@ function BillingModal({
         return;
       }
 
-      addLog(`[Stripe] 正在跳转到支付页面...`);
+      addLog(`[Stripe] 已进入 Stripe 真实收银台，正在跳转支付页面...`);
       window.location.href = data.url;
     } catch (error: any) {
       const errMsg = error.message || t("billing_error_payment_failed");

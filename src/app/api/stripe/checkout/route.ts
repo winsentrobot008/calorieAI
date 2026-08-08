@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
+const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
 
 /**
  * POST /api/stripe/checkout
@@ -17,18 +18,27 @@ const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
  *   cancel_url?: string
  * }
  * 响应: { sessionId: string, url: string }
+ *
+ * 真实模式要求 STRIPE_SECRET_KEY 与 NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY 同时有效；
+ * 任一缺失/占位时返回 mock 降级，前端可据此展示演示成功。
  */
 export async function POST(request: NextRequest) {
   try {
     // ── 验证 Stripe 是否已配置 ──────────────────────────
-    if (!STRIPE_SECRET_KEY || STRIPE_SECRET_KEY === "YOUR_STRIPE_SECRET_KEY_HERE") {
+    const secretValid =
+      !!STRIPE_SECRET_KEY && STRIPE_SECRET_KEY !== "YOUR_STRIPE_SECRET_KEY_HERE";
+    const publishableValid =
+      !!STRIPE_PUBLISHABLE_KEY &&
+      STRIPE_PUBLISHABLE_KEY !== "YOUR_STRIPE_PUBLISHABLE_KEY_HERE";
+    if (!secretValid || !publishableValid) {
       const body = await request.json().catch(() => ({}));
       const { plan = "monthly" } = body;
       return NextResponse.json({
         sessionId: `cs_mock_${Date.now()}`,
         url: `/billing/success?plan=${plan}&mock=true`,
         mock: true,
-        message: "演示模式：未配置真实 Stripe 密钥。设置 STRIPE_SECRET_KEY 启用真实支付。",
+        message:
+          "演示模式：未配置完整的 Stripe 密钥（STRIPE_SECRET_KEY / NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY）。设置后启用真实支付。",
       });
     }
 

@@ -58,6 +58,14 @@ function BillingSuccessContent() {
       return;
     }
 
+    // 服务端激活订阅并累加 $1.00 收入（Stripe webhook 未配置/延迟时的兜底，按 order_id 去重）
+    const uid = localStorage.getItem("user_id") || "anonymous";
+    const email = localStorage.getItem("user_email") || "";
+    fetch(
+      `/api/v1/billing/subscribe?plan=${plan}&user_id=${encodeURIComponent(uid)}&email=${encodeURIComponent(email)}&provider=stripe&order_id=${encodeURIComponent(sessionId)}`,
+      { method: "POST" }
+    ).catch(() => {});
+
     // 验证支付状态
     fetch(`/api/v1/billing/status?session_id=${sessionId}`)
       .then((res) => res.json())
