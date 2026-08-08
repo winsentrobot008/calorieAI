@@ -51,6 +51,7 @@ export async function POST(request: NextRequest) {
       deactivateSubscription,
       getSubscriptionByStripeCustomerId,
       getSubscriptionByStripeSubscriptionId,
+      recordPayment,
     } = await import("@/lib/billing-store");
 
     switch (event.type) {
@@ -93,6 +94,15 @@ export async function POST(request: NextRequest) {
           provider: "stripe",
           current_period_start: now.toISOString(),
           current_period_end: periodEnd.toISOString(),
+        });
+
+        // 统一测试价 $1.00 入账（按 session.id 去重，幂等）
+        recordPayment({
+          orderId: session.id,
+          provider: "stripe",
+          plan: plan as "monthly" | "yearly" | "permanent",
+          amount: 1.0,
+          email,
         });
 
         console.log(`[Stripe Webhook] ✅ 订阅已激活: userId=${userId}, plan=${plan}, ends=${periodEnd.toISOString()}`);

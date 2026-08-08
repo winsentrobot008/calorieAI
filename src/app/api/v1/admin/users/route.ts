@@ -1,19 +1,18 @@
 import { NextResponse } from "next/server";
+import { getAllSubscriptions } from "@/lib/billing-store";
 
 export async function GET() {
   return NextResponse.json({
-    users: [
-      {
-        id: "user_001",
-        name: "Test User",
-        email: "test@example.com",
-        subscription_status: "active",
-        subscription_plan: "monthly",
-        license_type: null,
-        daily_free_uses: 1,
-        ad_reward_credits: 0,
-        is_active: true,
-      },
-    ],
+    users: getAllSubscriptions().map((sub) => ({
+      id: sub.user_id,
+      name: sub.email ? sub.email.split("@")[0] : sub.user_id,
+      email: sub.email || sub.user_id,
+      subscription_status: sub.is_active ? "active" : "inactive",
+      subscription_plan: sub.plan,
+      license_type: sub.is_permanent ? "permanent" : null,
+      provider: sub.provider,
+      current_period_end: sub.current_period_end,
+      is_active: sub.is_active,
+    })),
   });
 }

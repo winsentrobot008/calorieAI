@@ -43,8 +43,28 @@ export interface SubscriptionRecord {
   updated_at: string;
 }
 
+export interface PaymentRecord {
+  /** 支付流水唯一 ID */
+  id: string;
+  /** PayPal Order ID / Stripe Session ID（去重依据） */
+  order_id: string;
+  /** 支付渠道: "stripe" | "paypal" */
+  provider: "stripe" | "paypal";
+  /** 方案标识 */
+  plan: "monthly" | "yearly" | "permanent";
+  /** 支付金额（USD） */
+  amount: number;
+  /** 货币 */
+  currency: string;
+  /** 用户邮箱（可选） */
+  email?: string;
+  /** 创建时间 */
+  created_at: string;
+}
+
 interface BillingStoreData {
   subscriptions: Record<string, SubscriptionRecord>;
+  payments: PaymentRecord[];
 }
 
 // ─── File Path ────────────────────────────────────────────────────────
@@ -65,12 +85,16 @@ function readStore(): BillingStoreData {
   try {
     if (fs.existsSync(DATA_FILE)) {
       const raw = fs.readFileSync(DATA_FILE, "utf-8");
-      return JSON.parse(raw);
+      const data = JSON.parse(raw);
+      return {
+        subscriptions: data.subscriptions || {},
+        payments: data.payments || [],
+      };
     }
   } catch (err) {
     console.error("[BillingStore] Error reading store:", err);
   }
-  return { subscriptions: {} };
+  return { subscriptions: {}, payments: [] };
 }
 
 function writeStore(data: BillingStoreData): void {
@@ -202,6 +226,74 @@ export function getPermanentLicenseCount(): number {
     if (sub.is_active && sub.is_permanent) count++;
   }
   return count;
+}
+
+/**
+ * 记录一笔支付流水（按 order_id 去重，防止 webhook 重试/双路径重复入账）
+ */
+export function recordPayment(input: {
+  orderId: string;
+  provider: "stripe" | "paypal";
+  plan: "monthly" | "yearly" | "permanent";
+  amount: number;
+  currency?: string;
+  email?: string;
+}): PaymentRecord | null {
+  const store = readStore();
+  if (store.payments.some((p) => p.order_id === input.orderId)) {
+    return null; // 已入账，幂等跳过
+  }
+
+  const record: PaymentRecord = {
+    id: `pay_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    order_id: input.orderId,
+    provider: input.provider,
+    plan: input.plan,
+    amount: input.amount,
+    currency: input.currency || "USD",
+    email: input.email || undefined,
+    created_at: new Date().toISOString(),
+  };
+
+  store.payments.push(record);
+  if (store.payments.length > 2000) store.payments = store.payments.slice(-2000);
+  writeStore(store);
+  return record;
+}
+
+/**
+ * 收入统计：总金额 / 订阅与买断拆分 / 方案拆分 / 最近流水
+ */
+export function getPaymentStats(): {
+  total_revenue: number;
+  count: number;
+  subscription_revenue: number;
+  license_revenue: number;
+  plan_breakdown: Record<string, number>;
+  recent_payments: PaymentRecord[];
+} {
+  const store = readStore();
+  const payments = store.payments || [];
+  let total = 0;
+  let subscription = 0;
+  let license = 0;
+  const planBreakdown: Record<string, number> = { monthly: 0, yearly: 0, permanent: 0 };
+
+  for (const p of payments) {
+    total += p.amount;
+    if (p.plan === "permanent") license += p.amount;
+    else subscription += p.amount;
+    planBreakdown[p.plan] = (planBreakdown[p.plan] || 0) + p.amount;
+  }
+
+  return {
+    total_revenue: total,
+    count: payments.length,
+    subscription_revenue: subscription,
+    license_revenue: license,
+    plan_breakdown: planBreakdown,
+    recent_payments: payments.slice(-20).reverse(),
+  };
 }
 
 /**

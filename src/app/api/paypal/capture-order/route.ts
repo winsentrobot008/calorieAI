@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { activateSubscription } from "@/lib/billing-activate";
+import { recordPayment } from "@/lib/billing-store";
 
 const PAYPAL_CLIENT_ID = process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID;
 const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET;
@@ -112,6 +113,14 @@ export async function POST(request: NextRequest) {
           plan: effectivePlan,
           provider: "paypal",
           orderId: capture.id,
+        });
+        // 统一测试价 $1.00 入账（按 order_id 去重，幂等）
+        recordPayment({
+          orderId: capture.id,
+          provider: "paypal",
+          plan: effectivePlan,
+          amount: 1.0,
+          email: email || capture.payer?.email_address || "",
         });
         pro = true;
         console.log(

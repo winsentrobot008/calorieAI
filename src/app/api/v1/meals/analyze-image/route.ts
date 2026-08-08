@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getClientIp, checkAntiCrawler, rateLimitRequest } from "@/lib/anti-crawler";
+import { recordVisionLog } from "@/lib/vision-log-store";
 
 /**
  * POST /api/v1/meals/analyze-image
@@ -42,18 +44,72 @@ import { NextRequest, NextResponse } from "next/server";
  * 绝不回退到固定 Mock 数据，避免把演示数据误当真实识别结果。
  */
 export async function POST(request: NextRequest) {
+  const startTime = Date.now();
+  const ip = getClientIp(request);
+  const ua = request.headers.get("user-agent") || "";
+
   try {
+    // ── WAF 反爬虫校验：拦截明显 Bot / 自动化客户端 ──
+    const guard = checkAntiCrawler(ua);
+    if (guard.blocked) {
+      recordVisionLog({
+        ip,
+        provider: "waf",
+        label: "WAF",
+        status: 403,
+        latency_ms: Date.now() - startTime,
+        error: guard.reason,
+      });
+      return NextResponse.json(
+        { detail: "请求被安全网关拦截", code: "BLOCKED_BY_WAF", reason: guard.reason },
+        { status: 403, headers: { "X-WAF-Block": guard.reason || "blocked" } }
+      );
+    }
+
+    // ── 单 IP 频次限制：防恶意并发消耗 API 额度 ──
+    const rl = rateLimitRequest(ip);
+    if (!rl.allowed) {
+      recordVisionLog({
+        ip,
+        provider: "waf",
+        label: "WAF",
+        status: 429,
+        latency_ms: Date.now() - startTime,
+        error: "RATE_LIMITED",
+      });
+      return NextResponse.json(
+        { detail: "请求过于频繁，请稍后再试", code: "RATE_LIMITED", retry_after: rl.retryAfterSeconds },
+        { status: 429, headers: { "Retry-After": String(rl.retryAfterSeconds || 60) } }
+      );
+    }
+
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
     const mealType = formData.get("meal_type")?.toString() || "unknown";
 
     if (!file) {
+      recordVisionLog({
+        ip,
+        provider: "api",
+        label: "API",
+        status: 400,
+        latency_ms: Date.now() - startTime,
+        error: "MISSING_FILE",
+      });
       return NextResponse.json({ detail: "请上传图片文件" }, { status: 400 });
     }
 
     // 校验文件类型
     const validTypes = ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"];
     if (!validTypes.includes(file.type)) {
+      recordVisionLog({
+        ip,
+        provider: "api",
+        label: "API",
+        status: 400,
+        latency_ms: Date.now() - startTime,
+        error: `UNSUPPORTED_TYPE: ${file.type}`,
+      });
       return NextResponse.json({ detail: "不支持的图片格式，请上传 JPEG/PNG/WebP" }, { status: 400 });
     }
 
@@ -93,6 +149,16 @@ export async function POST(request: NextRequest) {
         const result = await provider.analyze(apiKey);
         // 服务端日志显式记录命中提供商与模型名
         console.log(`[Vision] 识别成功，命中提供商: ${result.model.label}（attempts=${attempted}）`);
+        // 运行日志：记录命中模型、耗时与结果数量
+        recordVisionLog({
+          ip,
+          provider: result.model.provider,
+          model: result.model.model,
+          label: result.model.label,
+          status: 200,
+          latency_ms: Date.now() - startTime,
+          count: result.count,
+        });
         // 统一附上回退元数据：switched=true 表示实际由备用提供商完成识别
         return NextResponse.json({
           ...result,
@@ -107,6 +173,14 @@ export async function POST(request: NextRequest) {
     // 全部提供商失败：返回可诊断错误，绝不静默回退到固定 Mock 数据
     if (lastError) {
       console.error("[Vision] All providers failed:", lastError.message);
+      recordVisionLog({
+        ip,
+        provider: "api",
+        label: "VISION",
+        status: 502,
+        latency_ms: Date.now() - startTime,
+        error: lastError.message.slice(0, 200),
+      });
       return NextResponse.json(
         { detail: "AI 视觉识别失败: " + lastError.message, code: "VISION_PROVIDER_ERROR" },
         { status: 502 }
@@ -115,6 +189,14 @@ export async function POST(request: NextRequest) {
 
     // 无任何密钥：明确报错（NO_VISION_KEY），不再返回固定 Mock 的白米饭
     console.warn("[Vision] No API key configured (GEMINI_API_KEY / OPENROUTER_API_KEY / DEEPSEEK_API_KEY)");
+    recordVisionLog({
+      ip,
+      provider: "api",
+      label: "VISION",
+      status: 503,
+      latency_ms: Date.now() - startTime,
+      error: "NO_VISION_KEY",
+    });
     return NextResponse.json(
       {
         detail: "未配置 AI 视觉密钥（GEMINI_API_KEY / OPENROUTER_API_KEY / DEEPSEEK_API_KEY），无法识图",
@@ -124,6 +206,14 @@ export async function POST(request: NextRequest) {
     );
   } catch (error: any) {
     console.error("[Vision Error]", error);
+    recordVisionLog({
+      ip,
+      provider: "api",
+      label: "VISION",
+      status: 500,
+      latency_ms: Date.now() - startTime,
+      error: (error?.message || "UNKNOWN").slice(0, 200),
+    });
     return NextResponse.json({ detail: "图像分析失败: " + error.message }, { status: 500 });
   }
 }

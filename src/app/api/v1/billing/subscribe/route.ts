@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { activateSubscription } from "@/lib/billing-activate";
+import { recordPayment } from "@/lib/billing-store";
 
 /**
  * POST /api/v1/billing/subscribe?plan=monthly&user_id=xxx&email=xxx&provider=paypal&order_id=xxx
@@ -30,6 +31,15 @@ export async function POST(request: NextRequest) {
       plan: plan as "monthly" | "yearly" | "permanent",
       provider: provider as "stripe" | "paypal",
       orderId: orderId || undefined,
+    });
+
+    // 统一测试价 $1.00 入账（按 order_id 去重；PayPal 主路径已在 capture 入账，此路径为兜底）
+    recordPayment({
+      orderId: orderId || `sub_${Date.now()}`,
+      provider: provider as "stripe" | "paypal",
+      plan: plan as "monthly" | "yearly" | "permanent",
+      amount: 1.0,
+      email: email || "",
     });
 
     return NextResponse.json({

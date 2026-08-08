@@ -185,9 +185,23 @@ body {
   margin-top: 8px;
   font-size: 10px;
   color: var(--text-dim);
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
   letter-spacing: 0.3px;
 }
+.admin-entry {
+  background: none;
+  border: 1px solid #475569;
+  color: #94a3b8;
+  border-radius: 99px;
+  padding: 2px 12px;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all .2s;
+}
+.admin-entry:hover { color: #fbbf24; border-color: #f59e0b; }
 
 /* ── Credits & Rewarded Ad ── */
 .credit-bar {
@@ -440,6 +454,7 @@ body {
 .admin-cell-id { font-family: monospace; font-size: 10px; color: var(--text-dim); }
 .admin-status { font-size: 11px; padding: 2px 8px; border-radius: 4px; background: #1e293b; color: var(--text-dim); }
 .admin-status.active { background: #34d39922; color: #34d399; }
+.admin-status.error { background: #ef444422; color: #ef4444; }
 .admin-config-form { margin-bottom: 12px; }
 .admin-config-form h4 { font-size: 13px; color: var(--text-muted); margin-bottom: 8px; }
 .admin-action-tag {

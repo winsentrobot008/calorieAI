@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
+import { getPaymentStats } from "@/lib/billing-store";
 
 export async function GET() {
+  const stats = getPaymentStats();
   return NextResponse.json({
-    total_revenue: 4599.5,
-    breakdown: { subscription: 3599.5, license: 1000 },
-    plan_breakdown: { monthly: 1200, yearly: 2399.5, permanent: 1000 },
-    invoice_count: 45,
+    total_revenue: stats.total_revenue,
+    breakdown: { subscription: stats.subscription_revenue, license: stats.license_revenue },
+    plan_breakdown: stats.plan_breakdown,
+    invoice_count: stats.count,
+    recent_payments: stats.recent_payments,
   });
 }
