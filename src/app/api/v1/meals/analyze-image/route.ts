@@ -83,7 +83,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const formData = await request.formData();
+    let formData: FormData;
+    try {
+      formData = await request.formData();
+    } catch {
+      // 非 multipart/form-data 请求体（如 urlencoded/JSON）视为缺少文件
+      recordVisionLog({
+        ip,
+        provider: "api",
+        label: "API",
+        status: 400,
+        latency_ms: Date.now() - startTime,
+        error: "INVALID_FORM_DATA",
+      });
+      return NextResponse.json({ detail: "请上传图片文件" }, { status: 400 });
+    }
     const file = formData.get("file") as File | null;
     const mealType = formData.get("meal_type")?.toString() || "unknown";
 
