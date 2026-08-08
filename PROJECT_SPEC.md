@@ -49,11 +49,30 @@ src/
 │   ├── locale-switcher.tsx   # 语言切换器
 │   └── theme-provider.tsx    # 明暗主题（挂载后读 localStorage）
 └── lib/
+    ├── db/                   # ⭐ DAL 抽象层: index.ts + types.ts + adapters/{file,kv,postgres}
     ├── i18n/                 # 零依赖 i18n: index.ts + zh.json + en.json
     ├── auth.tsx              # Auth 上下文（挂载后读 localStorage）
-    ├── billing-store.ts      # 订阅持久化
+    ├── billing-store.ts      # 订阅状态持久化
+    ├── credits-store.ts      # 积分本地文件回退实现
+    ├── vision-log-store.ts   # 识图日志
+    ├── analytics-store.ts    # 访问统计
     └── oauthDetect.ts        # OAuth 提供商检测
 ```
+
+### 2.1 统一数据库访问层 (DAL)
+
+[`src/lib/db/index.ts`](src/lib/db/index.ts:17) 的 `pickAdapter()` 按优先级自动选择存储：
+
+```
+1. POSTGRES_URL / DATABASE_URL           → Postgres（Vercel Postgres / Neon / Supabase）
+2. KV_REST_API_URL + KV_REST_API_TOKEN   → Vercel KV / Upstash Redis
+3. 均未配置                              → 本地文件（os.tmpdir 回退，仅本地/单实例调试）
+```
+
+- [`types.ts`](src/lib/db/types.ts:19) 定义 `DbAdapter` 契约：覆盖积分、订阅、支付流水、识图日志、访问统计五类数据。
+- 三套适配器实现：Postgres（`ON CONFLICT` upsert，建表自动初始化）/ KV（`calorieai:` key 前缀）/ 文件（`os.tmpdir()/calorieai-data`）。
+- 跨实例/跨设备数据永久保存：配置 Postgres 或 KV 后，所有 Lambda 实例读写同一存储。
+- **0-Token 运维**：访问统计、识图日志、支付流水、模型健康度全部自建 DAL 持久化，不依赖付费第三方可观测服务。
 
 ## 3. SSR / Hydration 规范（React #418）
 
@@ -96,9 +115,10 @@ src/
 
 | 渠道 | 说明 |
 |------|------|
-| Stripe（主） | `/api/stripe/checkout` + `/api/stripe/webhook`；信用卡/支付宝/微信支付 |
-| PayPal（辅） | `/api/paypal/create-order` + `/api/paypal/capture-order` |
-| 订阅状态 | `/api/v1/billing/status` / `subscribe` / `license` / `ad-reward`；持久化 `data/subscriptions.json` |
+| Stripe（主） | `/api/stripe/checkout` + `/api/stripe/webhook`；信用卡/Apple Pay/Link/支付宝/微信支付 |
+| PayPal（辅） | `/api/paypal/create-order` + `/api/paypal/capture-order`；微额支付申请逻辑与兜底逻辑 |
+| 订阅状态 | `/api/v1/billing/status` / `subscribe` / `license` / `ad-reward`；持久化经 DAL 写入（Postgres/KV/文件） |
+| 积分系统 | 服务端权威：`GET/POST /api/v1/user/credits`；识图 **-1**、广告 **+10**、充值/Pro 解锁；`initCreditsIfMissing`（新用户赠送 3）+ `addServerCredits`（不低于 0） |
 | 降级 | 未配置真实密钥时前后端自动进入 **mock 演示模式** |
 
 ## 6. 交付前 Agent 自检协议

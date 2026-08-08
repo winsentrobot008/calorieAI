@@ -17,17 +17,19 @@
 - 框架: Next.js 16 (App Router) + React 19 + TypeScript + Turbopack
 - 样式与 UI: Tailwind CSS v4 + Lucide Icons
 - 状态与 i18n: 自定义 `LocaleInit` + `hydrated` 状态延迟加载（防 React #418）；`localStorage > navigator.language > en`
-- 支付: Stripe (信用卡/支付宝/微信) + PayPal (`@paypal/react-paypal-js`)
-- AI: Google Gemini Flash / OpenAI GPT-4o Vision
+- 支付: Stripe (信用卡/Apple Pay/Link/支付宝/微信) + PayPal (微额支付兜底)
+- AI: A→B→C 回退链（Gemini Vision → OpenRouter → DeepSeek），不返回 Mock
+- 积分: 服务端权威（识图 -1 / 广告 +10 / 充值/Pro），`src/lib/db` DAL 记账
+- 持久化 (DAL): Postgres → Vercel KV/Redis → 本地文件（os.tmpdir）三机制自动降级
 - TTS: Edge-TTS (Azure Cognitive Services)
 - 部署: Vercel (Git 自动部署) + Cloudflare Wildcard DNS（`*.app008ai.com`）
 
 ## 目录结构
 - `src/app` — 页面 + API 路由
-  - `api/` — 后端: `stripe/*`、`paypal/*`、`v1/{billing,meals,user,stats,insight,admin,ads}`、`tts`
+  - `api/` — 后端: `stripe/*`、`paypal/*`、`v1/{billing,meals,user,credits,stats,insight,admin,ads}`、`tts`
   - `billing/` — 支付成功/取消页
 - `src/components` — 前端组件 (`theme-provider`、`locale-init`、`locale-switcher`)
-- `src/lib` — 状态与工具 (`i18n/` 多语言、`billing-store`、`auth`、`oauthDetect`)
+- `src/lib` — 状态与工具：`db/` (DAL 抽象层 + adapters)、`i18n/` 多语言、`billing-store`、`credits-store`、`vision-log-store`、`analytics-store`、`auth`、`oauthDetect`
 - `scripts/` — 配置检测 + E2E 测试
 - `public/` — 静态资源
 - `data/` — 运行时订阅数据 (gitignore)
@@ -55,6 +57,7 @@
 | 2026-08-01 | `140e990` | 文档固化 | — | 新增 `PROJECT_SPEC.md`；`README.md` 关联模板文档 |
 | 2026-08-01 | `c37a139` | 文档完善 | — | README 标注 100% Production Ready + 详细技术栈 + QA 质检；PROJECT_SPEC 重建（含 #418 根因与剥离指南） |
 | 2026-08-01 | 本次 | 文档瘦身 | — | 合并 `TEMPLATE.md`（→PROJECT_SPEC 附录 B）、`AGENTS.md`/`CLAUDE.md`（→PROJECT_SPEC §9）；最终仅保留 3 大标准文档 |
+| 2026-08-08 | 本次 | 文档全量重构 | — | README 重构：AI Vision SaaS 定位、Stripe/PayPal/积分变现、DAL 架构、部署与 QA 命令；PROJECT_SPEC/MEMORY 同步 DAL 与积分；`.env.example` 补 `NEXT_PUBLIC_APP_URL`/`REDIS_URL` |
 
 > 关联 QA 资产（独立仓库 `../qa-inspector`，commit `78308e6`）：质量守卫豁免 `blob:`/`data:` 对象 URL 误报；新增 `tests/hydration-logged-in.spec.ts` 已登录用户 #418 专项验证。
 
@@ -65,4 +68,7 @@
 1. **Hydration 防御策略（决策定稿）**：i18n 初始固定默认语言 `en` + `<LocaleInit />` 挂载后 `applyResolvedLocale()`；所有「读客户端状态」UI 一律 `mounted/hydrated` 双阶段渲染。此为 CalorieAI 及所有套娃项目的强制规范。
 2. **Master Template 定位**：CalorieAI 为 saas-factory-template（标准剥离指南见 [`PROJECT_SPEC.md`](PROJECT_SPEC.md) 附录 A/B）。
 3. **边界隔离纪律**：代码/文档修改限定 `./calorieai`；Git 独立仓库提交；QA 在 `../qa-inspector` 调度。
-4. **文档治理（本次）**：根目录标准化为 3 个 MD —— `README.md`（对外说明）、`PROJECT_SPEC.md`（生产规格+Agent 守则+套娃 SOP）、`MEMORY.md`（记忆+自愈履历+决策）。
+4. **文档治理**：根目录标准化为 3 个 MD —— `README.md`（对外说明）、`PROJECT_SPEC.md`（生产规格+Agent 守则+套娃 SOP）、`MEMORY.md`（记忆+自愈履历+决策）。
+5. **DAL 抽象层（决策定稿）**：订阅/积分/支付流水/识图日志/访问统计统一走 `src/lib/db` 的 `DbAdapter` 契约，Postgres → KV → 本地文件三机制自动降级；生产必须配置 Postgres 或 KV 以保证跨实例/跨设备数据永久保存。
+6. **服务端权威授权（决策定稿）**：积分余额与 Pro 权限仅由服务端 API 记账/判定，前端只消费结果；识图 -1、广告 +10、充值/Pro 解锁均为服务端权威交易。
+7. **视觉回退链（决策定稿）**：识图走 Gemini → OpenRouter → DeepSeek A→B→C 回退，任何提供商失败/缺密钥均返回明确错误，**绝不回退到 Mock 数据**。
