@@ -142,6 +142,8 @@ npm run dev
 | `PAYPAL_CLIENT_SECRET` | 可选 | PayPal 服务端密钥 |
 | `PAYPAL_API_URL` | 可选 | PayPal API 地址 |
 | `GEMINI_API_KEY` | 可选 | Google Gemini API 密钥 |
+| `OPENROUTER_API_KEY` | 可选 | OpenRouter 聚合视觉模型密钥（A→B→C 回退链 B 提供商） |
+| `DEEPSEEK_API_KEY` | 可选 | DeepSeek API 密钥（A→B→C 回退链 C 提供商） |
 | `TTS_SUBSCRIPTION_KEY` | 可选 | Azure TTS 密钥 |
 | `VITE_GOOGLE_CLIENT_ID` | 可选 | Google OAuth Client ID |
 
