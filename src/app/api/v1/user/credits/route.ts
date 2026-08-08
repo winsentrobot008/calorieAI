@@ -1,5 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, initCreditsIfMissing, addServerCredits } from "@/lib/db";
+import { createGatewayClient } from "@/lib/gateway-client";
+
+// 中央网关接入（可选）：配置 GATEWAY_BASE_URL + GATEWAY_APP_KEY 时，积分经跨端网关统一管理
+const gateway = createGatewayClient({
+  baseUrl: process.env.GATEWAY_BASE_URL || "",
+  appId: "calorieai",
+  appKey: process.env.GATEWAY_APP_KEY || "",
+});
 
 /**
  * GET /api/v1/user/credits?user_id=xxx
@@ -9,6 +17,14 @@ import { db, initCreditsIfMissing, addServerCredits } from "@/lib/db";
  */
 export async function GET(request: NextRequest) {
   const userId = new URL(request.url).searchParams.get("user_id") || "anonymous";
+  if (gateway.isConfigured()) {
+    try {
+      const g = await gateway.getCredits(userId);
+      return NextResponse.json({ credits: g.credits, is_pro: g.is_pro, user_id: userId, via: "gateway" });
+    } catch (err: any) {
+      console.warn("[Credits] 网关查询失败，回退本地:", err.message);
+    }
+  }
   const credits = await initCreditsIfMissing(userId);
   const sub = await db.getSubscription(userId);
   return NextResponse.json({ credits, is_pro: !!sub?.is_active, user_id: userId });
@@ -27,6 +43,15 @@ export async function POST(request: NextRequest) {
     const delta = Number(body.delta);
     if (!Number.isFinite(delta)) {
       return NextResponse.json({ error: "delta 必须为数字" }, { status: 400 });
+    }
+
+    if (gateway.isConfigured()) {
+      try {
+        const g = await gateway.updateCredits({ user_id: userId, delta });
+        return NextResponse.json({ credits: g.credits, is_pro: g.is_pro, user_id: userId, via: "gateway" });
+      } catch (err: any) {
+        console.warn("[Credits] 网关写入失败，回退本地:", err.message);
+      }
     }
 
     const credits = await addServerCredits(userId, delta);

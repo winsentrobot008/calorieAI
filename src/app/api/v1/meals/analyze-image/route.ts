@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getClientIp, checkAntiCrawler, rateLimitRequest } from "@/lib/anti-crawler";
 import { db } from "@/lib/db";
+import { createGatewayClient } from "@/lib/gateway-client";
+
+// 中央网关接入（可选）：配置 GATEWAY_BASE_URL + GATEWAY_APP_KEY 时启用
+const gateway = createGatewayClient({
+  baseUrl: process.env.GATEWAY_BASE_URL || "",
+  appId: "calorieai",
+  appKey: process.env.GATEWAY_APP_KEY || "",
+});
 
 /**
  * POST /api/v1/meals/analyze-image
@@ -132,6 +140,28 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(bytes);
     const base64 = buffer.toString("base64");
     const mimeType = file.type;
+
+    // ── 中央网关优先：统一 AI 识图（失败自动回退直连，旧业务不受影响） ──
+    if (gateway.isConfigured()) {
+      try {
+        const gwForm = new FormData();
+        gwForm.append("file", file);
+        gwForm.append("meal_type", mealType);
+        const gw = await gateway.vision(gwForm);
+        await db.recordVisionLog({
+          ip,
+          provider: gw.model.provider,
+          model: gw.model.model,
+          label: gw.model.label,
+          status: 200,
+          latency_ms: Date.now() - startTime,
+          count: gw.count,
+        });
+        return NextResponse.json({ ...gw, model: { ...gw.model, gateway: true } });
+      } catch (gwErr: any) {
+        console.warn("[Gateway] 网关识图失败，回退直连:", gwErr.message);
+      }
+    }
 
     // A → B → C 回退链定义（严格按数组顺序尝试，缺失密钥自动跳过）
     const providers: VisionProvider[] = [
