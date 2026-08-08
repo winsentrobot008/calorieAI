@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
-import { getAllSubscriptions } from "@/lib/billing-store";
+import { db } from "@/lib/db";
 
 export async function GET() {
+  const subs = await db.getAllSubscriptions();
   return NextResponse.json({
-    users: getAllSubscriptions().map((sub) => ({
+    users: subs.map((sub) => ({
       id: sub.user_id,
       name: sub.email ? sub.email.split("@")[0] : sub.user_id,
       email: sub.email || sub.user_id,

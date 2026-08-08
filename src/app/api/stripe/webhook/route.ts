@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { db } from "@/lib/db";
 
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
@@ -45,15 +46,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
     }
 
-    // ── 延迟导入 billing-store (避免启动时文件系统错误) ──
-    const {
-      upsertSubscription,
-      deactivateSubscription,
-      getSubscriptionByStripeCustomerId,
-      getSubscriptionByStripeSubscriptionId,
-      recordPayment,
-    } = await import("@/lib/billing-store");
-
     switch (event.type) {
       // ═══════════════════════════════════════════════════
       //  checkout.session.completed
@@ -82,7 +74,7 @@ export async function POST(request: NextRequest) {
         }
 
         // 存储订阅记录
-        upsertSubscription(userId, {
+        await db.upsertSubscription(userId, {
           email,
           plan_type: planType as "subscription" | "license",
           plan: plan as "monthly" | "yearly" | "permanent",
@@ -97,7 +89,7 @@ export async function POST(request: NextRequest) {
         });
 
         // 统一测试价 $1.00 入账（按 session.id 去重，幂等）
-        recordPayment({
+        await db.recordPayment({
           orderId: session.id,
           provider: "stripe",
           plan: plan as "monthly" | "yearly" | "permanent",
@@ -118,12 +110,12 @@ export async function POST(request: NextRequest) {
         console.log("[Stripe Webhook] Subscription updated:", subscription.id);
 
         // 通过 stripe_subscription_id 查找本地记录
-        const existing = getSubscriptionByStripeSubscriptionId(subscription.id);
+        const existing = await db.getSubscriptionByStripeSubscriptionId(subscription.id);
         if (!existing) {
           // 尝试通过 customer ID 查找
-          const byCustomer = getSubscriptionByStripeCustomerId(subscription.customer);
+          const byCustomer = await db.getSubscriptionByStripeCustomerId(subscription.customer);
           if (byCustomer) {
-            upsertSubscription(byCustomer.user_id, {
+            await db.upsertSubscription(byCustomer.user_id, {
               stripe_subscription_id: subscription.id,
               plan: subscription.items?.data?.[0]?.price?.recurring?.interval === "year" ? "yearly" : "monthly",
               is_active: subscription.status === "active" || subscription.status === "trialing",
@@ -132,7 +124,7 @@ export async function POST(request: NextRequest) {
             });
           }
         } else {
-          upsertSubscription(existing.user_id, {
+          await db.upsertSubscription(existing.user_id, {
             plan: subscription.items?.data?.[0]?.price?.recurring?.interval === "year" ? "yearly" : "monthly",
             is_active: subscription.status === "active" || subscription.status === "trialing",
             current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
@@ -150,9 +142,9 @@ export async function POST(request: NextRequest) {
         const subscription = event.data.object as any;
         console.log("[Stripe Webhook] Subscription deleted:", subscription.id);
 
-        const existing = getSubscriptionByStripeSubscriptionId(subscription.id);
+        const existing = await db.getSubscriptionByStripeSubscriptionId(subscription.id);
         if (existing) {
-          deactivateSubscription(existing.user_id);
+          await db.deactivateSubscription(existing.user_id);
           console.log(`[Stripe Webhook] 🔴 订阅已停用: userId=${existing.user_id}`);
         } else {
           console.log("[Stripe Webhook] 未找到对应本地记录的订阅:", subscription.id);
@@ -169,12 +161,12 @@ export async function POST(request: NextRequest) {
         console.log("[Stripe Webhook] Invoice paid:", invoice.id);
 
         if (invoice.subscription) {
-          const existing = getSubscriptionByStripeSubscriptionId(invoice.subscription);
+          const existing = await db.getSubscriptionByStripeSubscriptionId(invoice.subscription);
           if (existing) {
             // 获取 Stripe 订阅的最新信息
             try {
               const updatedSub = (await stripe.subscriptions.retrieve(invoice.subscription)) as any;
-              upsertSubscription(existing.user_id, {
+              await db.upsertSubscription(existing.user_id, {
                 is_active: true,
                 current_period_start: new Date(updatedSub.current_period_start * 1000).toISOString(),
                 current_period_end: new Date(updatedSub.current_period_end * 1000).toISOString(),
@@ -197,7 +189,7 @@ export async function POST(request: NextRequest) {
         console.log("[Stripe Webhook] ❌ Invoice payment failed:", invoice.id);
 
         if (invoice.subscription) {
-          const existing = getSubscriptionByStripeSubscriptionId(invoice.subscription);
+          const existing = await db.getSubscriptionByStripeSubscriptionId(invoice.subscription);
           if (existing) {
             console.warn(`[Stripe Webhook] ⚠️ 用户 ${existing.user_id} 续费失败，订阅 ${invoice.subscription}`);
           }

@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { getVisionStats } from "@/lib/vision-log-store";
+import { getVisionStats } from "@/lib/db";
 
 export async function GET() {
-  const stats = getVisionStats();
+  const stats = await getVisionStats();
   return NextResponse.json({
     total_calls: stats.total_calls,
     today_calls: stats.today_calls,

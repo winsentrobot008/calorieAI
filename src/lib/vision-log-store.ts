@@ -66,6 +66,11 @@ export function getVisionLogs(limit = 100): VisionLogEntry[] {
   return readLogs().slice(-limit).reverse();
 }
 
+/** 获取全部识图日志（原始顺序，供数据库访问层适配器使用） */
+export function getAllVisionLogs(): VisionLogEntry[] {
+  return readLogs();
+}
+
 /** 识图聚合统计：总调用 / 今日 / 错误率 / 按提供商与模型聚合 */
 export function getVisionStats(): {
   total_calls: number;

@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
-import { getPaymentStats, getActiveSubscriptionCount, getPermanentLicenseCount, getAllSubscriptions } from "@/lib/billing-store";
-import { getVisionStats } from "@/lib/vision-log-store";
-import { getVisitStats } from "@/lib/analytics-store";
+import { db, getPaymentStats, getVisionStats, getVisitStats } from "@/lib/db";
 
 export async function GET() {
-  const payments = getPaymentStats();
-  const vision = getVisionStats();
-  const visits = getVisitStats();
-  const subscriptions = getAllSubscriptions();
+  const [payments, vision, visits, subscriptions] = await Promise.all([
+    getPaymentStats(),
+    getVisionStats(),
+    getVisitStats(),
+    db.getAllSubscriptions(),
+  ]);
 
   return NextResponse.json({
     overview: {
@@ -15,8 +15,8 @@ export async function GET() {
       total_visits: visits.total_visits,
       today_recognitions: vision.today_calls,
       model_calls: vision.total_calls,
-      active_subscriptions: getActiveSubscriptionCount(),
-      permanent_licenses: getPermanentLicenseCount(),
+      active_subscriptions: subscriptions.filter((s) => s.is_active).length,
+      permanent_licenses: subscriptions.filter((s) => s.is_active && s.is_permanent).length,
       error_rate_pct: vision.error_rate_pct,
       model_errors: vision.errors,
       total_revenue: payments.total_revenue,

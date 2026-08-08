@@ -27,6 +27,13 @@ function BillingSuccessContent() {
         amount: 1.0,
       });
       const next = addCredits(PAYMENT_CREDIT_BONUS);
+      // 同步服务器持久化积分（跨设备一致）
+      const uid = localStorage.getItem("user_id") || "anonymous";
+      fetch("/api/v1/user/credits", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: uid, delta: PAYMENT_CREDIT_BONUS, action: "purchase" }),
+      }).catch(() => {});
       console.log(`[BillingSuccess] 充值奖励 +${PAYMENT_CREDIT_BONUS} 积分，余额 ${next}`);
     } catch (err) {
       console.error("[BillingSuccess] localStorage 写入失败:", err);

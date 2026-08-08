@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { recordVisit } from "@/lib/analytics-store";
 import { getClientIp } from "@/lib/anti-crawler";
+import { db } from "@/lib/db";
 
 /**
  * POST /api/v1/track/visit
@@ -11,7 +11,7 @@ import { getClientIp } from "@/lib/anti-crawler";
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
-    recordVisit({
+    await db.recordVisit({
       ip: getClientIp(request),
       ua: request.headers.get("user-agent") || "",
       path: body.path || "/",

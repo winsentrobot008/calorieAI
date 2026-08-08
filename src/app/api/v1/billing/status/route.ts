@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSubscription } from "@/lib/billing-store";
+import { db } from "@/lib/db";
 
 /**
  * GET /api/v1/billing/status?user_id=xxx&email=xxx
@@ -26,10 +26,9 @@ export async function GET(request: NextRequest) {
   }
 
   // ── 查询订阅记录 ──
-  let record = userId ? getSubscription(userId) : null;
+  let record = userId ? await db.getSubscription(userId) : null;
   if (!record && email) {
-    const { getSubscriptionByEmail } = await import("@/lib/billing-store");
-    record = getSubscriptionByEmail(email);
+    record = await db.getSubscriptionByEmail(email);
   }
 
   // ── 未找到订阅记录 → 免费用户 ──

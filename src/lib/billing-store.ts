@@ -316,6 +316,12 @@ export function getPaymentStats(): {
   };
 }
 
+/** 获取全部支付流水（原始数据，供数据库访问层适配器使用） */
+export function getAllPayments(): PaymentRecord[] {
+  const store = readStore();
+  return store.payments || [];
+}
+
 /**
  * 获取所有用户列表（管理后台用）
  */

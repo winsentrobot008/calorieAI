@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { activateSubscription } from "@/lib/billing-activate";
-import { recordPayment } from "@/lib/billing-store";
+import { db } from "@/lib/db";
 
 const PAYPAL_CLIENT_ID = process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID;
 const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET;
@@ -107,7 +107,7 @@ export async function POST(request: NextRequest) {
       ) as "monthly" | "yearly" | "permanent";
       const effectiveUserId = userId || email || `paypal_${capture.id}`;
       try {
-        subscription = activateSubscription({
+        subscription = await activateSubscription({
           userId: effectiveUserId,
           email: email || capture.payer?.email_address || "",
           plan: effectivePlan,
@@ -115,7 +115,7 @@ export async function POST(request: NextRequest) {
           orderId: capture.id,
         });
         // 统一测试价 $1.00 入账（按 order_id 去重，幂等）
-        recordPayment({
+        await db.recordPayment({
           orderId: capture.id,
           provider: "paypal",
           plan: effectivePlan,

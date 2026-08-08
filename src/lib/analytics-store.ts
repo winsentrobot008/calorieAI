@@ -90,3 +90,8 @@ export function getVisitStats(): {
     recent_visits: visits.slice(-20).reverse(),
   };
 }
+
+/** 获取全部访问记录（原始顺序，供数据库访问层适配器使用） */
+export function getAllVisits(): VisitRecord[] {
+  return readVisits();
+}

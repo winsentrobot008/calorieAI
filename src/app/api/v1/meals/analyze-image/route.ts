@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getClientIp, checkAntiCrawler, rateLimitRequest } from "@/lib/anti-crawler";
-import { recordVisionLog } from "@/lib/vision-log-store";
+import { db } from "@/lib/db";
 
 /**
  * POST /api/v1/meals/analyze-image
@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
     // ── WAF 反爬虫校验：拦截明显 Bot / 自动化客户端 ──
     const guard = checkAntiCrawler(ua);
     if (guard.blocked) {
-      recordVisionLog({
+      await db.recordVisionLog({
         ip,
         provider: "waf",
         label: "WAF",
@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
     // ── 单 IP 频次限制：防恶意并发消耗 API 额度 ──
     const rl = rateLimitRequest(ip);
     if (!rl.allowed) {
-      recordVisionLog({
+      await db.recordVisionLog({
         ip,
         provider: "waf",
         label: "WAF",
@@ -88,7 +88,7 @@ export async function POST(request: NextRequest) {
       formData = await request.formData();
     } catch {
       // 非 multipart/form-data 请求体（如 urlencoded/JSON）视为缺少文件
-      recordVisionLog({
+      await db.recordVisionLog({
         ip,
         provider: "api",
         label: "API",
@@ -102,7 +102,7 @@ export async function POST(request: NextRequest) {
     const mealType = formData.get("meal_type")?.toString() || "unknown";
 
     if (!file) {
-      recordVisionLog({
+      await db.recordVisionLog({
         ip,
         provider: "api",
         label: "API",
@@ -116,7 +116,7 @@ export async function POST(request: NextRequest) {
     // 校验文件类型
     const validTypes = ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"];
     if (!validTypes.includes(file.type)) {
-      recordVisionLog({
+      await db.recordVisionLog({
         ip,
         provider: "api",
         label: "API",
@@ -164,7 +164,7 @@ export async function POST(request: NextRequest) {
         // 服务端日志显式记录命中提供商与模型名
         console.log(`[Vision] 识别成功，命中提供商: ${result.model.label}（attempts=${attempted}）`);
         // 运行日志：记录命中模型、耗时与结果数量
-        recordVisionLog({
+        await db.recordVisionLog({
           ip,
           provider: result.model.provider,
           model: result.model.model,
@@ -187,7 +187,7 @@ export async function POST(request: NextRequest) {
     // 全部提供商失败：返回可诊断错误，绝不静默回退到固定 Mock 数据
     if (lastError) {
       console.error("[Vision] All providers failed:", lastError.message);
-      recordVisionLog({
+      await db.recordVisionLog({
         ip,
         provider: "api",
         label: "VISION",
@@ -203,7 +203,7 @@ export async function POST(request: NextRequest) {
 
     // 无任何密钥：明确报错（NO_VISION_KEY），不再返回固定 Mock 的白米饭
     console.warn("[Vision] No API key configured (GEMINI_API_KEY / OPENROUTER_API_KEY / DEEPSEEK_API_KEY)");
-    recordVisionLog({
+    await db.recordVisionLog({
       ip,
       provider: "api",
       label: "VISION",
@@ -220,7 +220,7 @@ export async function POST(request: NextRequest) {
     );
   } catch (error: any) {
     console.error("[Vision Error]", error);
-    recordVisionLog({
+    await db.recordVisionLog({
       ip,
       provider: "api",
       label: "VISION",

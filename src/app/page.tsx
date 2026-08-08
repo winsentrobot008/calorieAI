@@ -1157,6 +1157,8 @@ export default function Home() {
     setLogs(prev => [...prev.slice(-99), ts]);
   }, []);
 
+  const getUserId = () => (typeof window !== "undefined" ? localStorage.getItem("user_id") || "anonymous" : "anonymous");
+
   // Handle admin login
   const handleAdminLogin = (s: any) => {
     sessionStorage.setItem("admin_session", JSON.stringify(s));
@@ -1181,6 +1183,18 @@ export default function Home() {
       setIsPro(true);
     }
     setCredits(readCredits());
+    // 冷启动 / 跨设备：以服务器持久化积分为准，保证完全一致
+    const userId = getUserId();
+    fetch(`/api/v1/user/credits?user_id=${encodeURIComponent(userId)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (d && typeof d.credits === "number") {
+          writeCredits(d.credits);
+          setCredits(d.credits);
+          if (d.is_pro) setIsPro(true);
+        }
+      })
+      .catch(() => {});
     // 访问量 / IP 监控上报（best-effort）
     fetch("/api/v1/track/visit", {
       method: "POST",
@@ -1196,6 +1210,20 @@ export default function Home() {
     setAdOpen(false);
     // 服务端记录一次奖励（best-effort，失败不影响本地发奖）
     fetch("/api/v1/billing/ad-reward", { method: "POST" }).catch(() => {});
+    // 同步服务器持久化积分（以服务器返回为准）
+    fetch("/api/v1/user/credits", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: getUserId(), delta: AD_REWARD_CREDITS, action: "ad" }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d && typeof d.credits === "number") {
+          writeCredits(d.credits);
+          setCredits(d.credits);
+        }
+      })
+      .catch(() => {});
     addLog(`[ADS] 广告播放完成，获得 +${AD_REWARD_CREDITS} 积分（余额 ${next}）`);
   }, [addLog]);
 
@@ -1204,12 +1232,38 @@ export default function Home() {
     const next = Math.max(0, readCredits() - 1);
     writeCredits(next);
     setCredits(next);
+    fetch("/api/v1/user/credits", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: getUserId(), delta: -1, action: "recognition" }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d && typeof d.credits === "number") {
+          writeCredits(d.credits);
+          setCredits(d.credits);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   // 支付完成充值奖励：购买 $1.00 方案直接获得 10 积分（Pro 无限积分叠加入账）
   const handlePaymentSuccess = useCallback(() => {
     const next = addCredits(PAYMENT_CREDIT_BONUS);
     setCredits(next);
+    fetch("/api/v1/user/credits", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_id: getUserId(), delta: PAYMENT_CREDIT_BONUS, action: "purchase" }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d && typeof d.credits === "number") {
+          writeCredits(d.credits);
+          setCredits(d.credits);
+        }
+      })
+      .catch(() => {});
     addLog(`[BILLING] 充值奖励: +${PAYMENT_CREDIT_BONUS} 积分（余额 ${next}）`);
   }, [addLog]);
 

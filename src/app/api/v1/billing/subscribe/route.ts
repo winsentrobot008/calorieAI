@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { activateSubscription } from "@/lib/billing-activate";
-import { recordPayment } from "@/lib/billing-store";
+import { db } from "@/lib/db";
 
 /**
  * POST /api/v1/billing/subscribe?plan=monthly&user_id=xxx&email=xxx&provider=paypal&order_id=xxx
@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
     }
 
     const effectiveUserId = userId || email || `paypal_${orderId || Date.now()}`;
-    const record = activateSubscription({
+    const record = await activateSubscription({
       userId: effectiveUserId,
       email: email || "",
       plan: plan as "monthly" | "yearly" | "permanent",
@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
     });
 
     // 统一测试价 $1.00 入账（按 order_id 去重；PayPal 主路径已在 capture 入账，此路径为兜底）
-    recordPayment({
+    await db.recordPayment({
       orderId: orderId || `sub_${Date.now()}`,
       provider: provider as "stripe" | "paypal",
       plan: plan as "monthly" | "yearly" | "permanent",

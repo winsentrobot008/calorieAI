@@ -1,4 +1,5 @@
-import { upsertSubscription, SubscriptionRecord } from "@/lib/billing-store";
+import type { SubscriptionRecord } from "@/lib/billing-store";
+import { db } from "@/lib/db";
 
 export interface ActivateSubscriptionOptions {
   /** 用户唯一标识 */
@@ -18,7 +19,7 @@ export interface ActivateSubscriptionOptions {
  * 计算周期到期时间（永久买断 → 2099-12-31）并写入 billing-store。
  * Stripe Webhook、PayPal Capture、手动订阅接口共用此逻辑，避免到期时间计算不一致。
  */
-export function activateSubscription(options: ActivateSubscriptionOptions): SubscriptionRecord {
+export async function activateSubscription(options: ActivateSubscriptionOptions): Promise<SubscriptionRecord> {
   const { userId, email = "", plan, provider, orderId } = options;
   const isPermanent = plan === "permanent";
 
@@ -32,7 +33,7 @@ export function activateSubscription(options: ActivateSubscriptionOptions): Subs
     periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, now.getDate());
   }
 
-  return upsertSubscription(userId, {
+  return db.upsertSubscription(userId, {
     email,
     plan_type: isPermanent ? "license" : "subscription",
     plan,
