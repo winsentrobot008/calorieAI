@@ -3,6 +3,7 @@
  */
 
 import fs from "fs";
+import os from "os";
 import path from "path";
 
 export interface VisitRecord {
@@ -12,11 +13,16 @@ export interface VisitRecord {
   ts: string;
 }
 
-const DATA_DIR = path.join(process.cwd(), "data");
+// Vercel serverless 只读文件系统：运行时数据写入 /tmp
+const DATA_DIR = path.join(os.tmpdir(), "calorieai-data");
 const DATA_FILE = path.join(DATA_DIR, "visits.json");
 
 function ensureDataDir(): void {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch (err) {
+    console.error("[AnalyticsStore] Error creating data dir:", err);
+  }
 }
 
 function readVisits(): VisitRecord[] {

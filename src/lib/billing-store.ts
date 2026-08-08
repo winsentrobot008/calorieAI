@@ -6,6 +6,7 @@
  */
 
 import fs from "fs";
+import os from "os";
 import path from "path";
 
 // ─── Types ────────────────────────────────────────────────────────────
@@ -69,14 +70,19 @@ interface BillingStoreData {
 
 // ─── File Path ────────────────────────────────────────────────────────
 
-const DATA_DIR = path.join(process.cwd(), "data");
+// Vercel serverless 文件系统只读（除 /tmp）：运行时数据统一写入临时目录
+const DATA_DIR = path.join(os.tmpdir(), "calorieai-data");
 const DATA_FILE = path.join(DATA_DIR, "subscriptions.json");
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
 function ensureDataDir(): void {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+  } catch (err) {
+    console.error("[BillingStore] Error creating data dir:", err);
   }
 }
 
