@@ -1186,8 +1186,8 @@ export default function Home() {
     setCredits(next);
   }, []);
 
-  // If admin is logged in, show admin dashboard
-  if (adminSession) {
+  // 管理员登录态：pending 仅表示打开登录页；完整 session 才进入后台
+  if (adminSession && !adminSession.pending) {
     return <AdminDashboardPage session={adminSession} onLogout={handleAdminLogout} />;
   }
 
