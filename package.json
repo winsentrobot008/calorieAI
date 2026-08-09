@@ -11,6 +11,7 @@
     "test:routes": "node scripts/check-routes.mjs",
     "test:api": "node scripts/smoke-api.mjs",
     "test:e2e": "python ../../scripts/qa_inspect.py --url http://127.0.0.1:3100",
+    "qa:ui": "python scripts/qa_ui.py --url http://127.0.0.1:3100",
     "prebuild": "npm run test:routes"
   },
   "dependencies": {

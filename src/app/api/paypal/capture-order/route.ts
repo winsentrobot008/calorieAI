@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { activateSubscription } from "@/lib/billing-activate";
-import { db } from "@/lib/db";
+import { db, addServerCredits } from "@/lib/db";
+import { getCreditPack, resolvePack, type CreditPack } from "@/lib/credit-packs";
 
 const PAYPAL_CLIENT_ID = process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID;
 const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET;
@@ -37,10 +37,9 @@ async function getAccessToken(): Promise<string> {
  *
  * Captures a PayPal order after the buyer approves it on the frontend.
  *
- * Body: { orderId: string, user_id?: string, email?: string, plan?: "monthly" | "yearly" | "permanent" }
+ * Body: { orderId: string, pack_id?: string, user_id?: string, email?: string }
  *
- * 捕获成功后自动激活用户 Pro 权限（写入 billing-store），
- * 前端无需再单独调用 /api/v1/billing/subscribe。
+ * 捕获成功后服务端直接按积分包发放积分（Credits Top-up，无订阅）。
  */
 export async function POST(request: NextRequest) {
   try {
@@ -48,7 +47,10 @@ export async function POST(request: NextRequest) {
     const { orderId } = body;
     const userId = body.user_id || "";
     const email = body.email || "";
-    const plan = body.plan || "";
+    const pack: CreditPack | undefined = body.pack_id ? getCreditPack(body.pack_id) : resolvePack(body.plan);
+    if (!pack) {
+      return NextResponse.json({ error: `未知积分包: ${body.pack_id}` }, { status: 400 });
+    }
 
     if (!orderId) {
       return NextResponse.json({ error: "缺少 orderId" }, { status: 400 });
@@ -60,7 +62,8 @@ export async function POST(request: NextRequest) {
         status: "COMPLETED",
         id: orderId,
         mock: true,
-        pro: true,
+        pack_id: pack.id,
+        credits_added: pack.credits,
         purchase_units: [{ payments: { captures: [{ id: `CAP_MOCK_${Date.now()}`, amount: { value: "0.00" } }] } }],
       });
     }
@@ -96,38 +99,25 @@ export async function POST(request: NextRequest) {
       timestamp: new Date().toISOString(),
     });
 
-    // 捕获成功（COMPLETED）→ 服务端直接激活订阅 / Pro 权限
-    let subscription = null;
-    let pro = false;
+    // 捕获成功（COMPLETED）→ 服务端直接发放积分包（无订阅）
+    let creditsAdded = 0;
     if (capture.status === "COMPLETED") {
-      const effectivePlan = (
-        plan ||
-        capture.purchase_units?.[0]?.reference_id ||
-        "monthly"
-      ) as "monthly" | "yearly" | "permanent";
       const effectiveUserId = userId || email || `paypal_${capture.id}`;
       try {
-        subscription = await activateSubscription({
-          userId: effectiveUserId,
-          email: email || capture.payer?.email_address || "",
-          plan: effectivePlan,
-          provider: "paypal",
-          orderId: capture.id,
-        });
-        // 统一测试价 $1.00 入账（按 order_id 去重，幂等）
+        creditsAdded = await addServerCredits(effectiveUserId, pack.credits);
+        // 按 order_id 去重记账（幂等）
         await db.recordPayment({
           orderId: capture.id,
           provider: "paypal",
-          plan: effectivePlan,
-          amount: 1.0,
+          plan: pack.id,
+          amount: pack.priceUsd,
           email: email || capture.payer?.email_address || "",
         });
-        pro = true;
         console.log(
-          `[PayPal Capture] ✅ Pro 权限已激活: userId=${effectiveUserId}, plan=${effectivePlan}`
+          `[PayPal Capture] ✅ 积分包到账: userId=${effectiveUserId}, pack=${pack.id}, +${pack.credits} → ${creditsAdded}`
         );
       } catch (err: any) {
-        console.error("[PayPal Capture] 订阅激活失败:", err.message);
+        console.error("[PayPal Capture] 积分发放失败:", err.message);
       }
     }
 
@@ -137,8 +127,8 @@ export async function POST(request: NextRequest) {
       captureId: capture.purchase_units?.[0]?.payments?.captures?.[0]?.id,
       payer_email: capture.payer?.email_address,
       amount: capture.purchase_units?.[0]?.payments?.captures?.[0]?.amount,
-      pro,
-      subscription,
+      pack_id: pack.id,
+      credits_added: creditsAdded,
     });
   } catch (error: any) {
     console.error("[PayPal Capture Order Error]", error);

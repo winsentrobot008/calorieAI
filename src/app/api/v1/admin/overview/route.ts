@@ -1,7 +1,11 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { getAdminAuth } from "@/lib/admin-auth";
 import { db, getPaymentStats, getVisionStats, getVisitStats } from "@/lib/db";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const auth = getAdminAuth(request);
+  if (!auth.ok) return auth.response;
+
   const [payments, vision, visits, subscriptions] = await Promise.all([
     getPaymentStats(),
     getVisionStats(),

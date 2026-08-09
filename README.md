@@ -86,7 +86,7 @@ rg -o "process\.env\.[A-Z_]+" src | sort -u
 | **产品** | CalorieAI — AI 驱动的卡路里识别与膳食管理 SaaS（本模版的参考实现） |
 | **核心能力** | AI 拍照识图（多模态视觉）→ 食物热量/蛋白/脂肪/碳水估算 → 膳食记录与趋势分析 |
 | **生产地址** | `https://calorie-ai-seven.vercel.app` |
-| **商业模型** | Freemium SaaS：免费用户每日 3 次识图 + 广告激励积分；Pro 订阅（月付/年付/永久买断）解锁无限识图 |
+| **商业模型** | Freemium SaaS：免费用户每日 3 次识图 + 广告激励积分；**Credits Top-up 积分充值（一次性付款/按次付费，无订阅）** |
 | **变现渠道** | Stripe（信用卡/Apple Pay/Link/支付宝/微信支付）+ PayPal（微额支付兜底）双通道 |
 | **授权体系** | 服务端权威积分 + Pro 权限，前端仅消费服务端 API 判定结果 |
 
@@ -120,7 +120,7 @@ Stripe Checkout 真实收款，支持：
 | 组件 | 路由 | 说明 |
 |------|------|------|
 | **创建 Checkout Session** | [`POST /api/stripe/checkout`](src/app/api/stripe/checkout/route.ts) | 双 Key 校验（`STRIPE_SECRET_KEY` + `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`），缺 Key 友好降级 Mock |
-| **Webhook 回调** | [`POST /api/stripe/webhook`](src/app/api/stripe/webhook/route.ts) | 监听支付/订阅事件并持久化到 DAL |
+| **Webhook 回调** | [`POST /api/stripe/webhook`](src/app/api/stripe/webhook/route.ts) | 监听 `checkout.session.completed` 一次性付款，按积分包发放积分并记账 |
 
 ### 4.2 PayPal 商业通道（辅渠道 · 微额支付兜底）
 
@@ -128,9 +128,8 @@ Stripe Checkout 真实收款，支持：
 
 | 组件 | 路由 | 说明 |
 |------|------|------|
-| **创建订单** | [`POST /api/paypal/create-order`](src/app/api/paypal/create-order/route.ts) | 创建 PayPal 订单（$1.00 测试价） |
-| **捕获付款** | [`POST /api/paypal/capture-order`](src/app/api/paypal/capture-order/route.ts) | 捕获成功后服务端直接激活订阅并记录 $1.00 流水 |
-| **手动激活** | [`POST /api/v1/billing/subscribe`](src/app/api/v1/billing/subscribe/route.ts) | 兜底激活（按 order_id 去重） |
+| **创建订单** | [`POST /api/paypal/create-order`](src/app/api/paypal/create-order/route.ts) | 按积分包创建 PayPal 订单（10/50/120 积分） |
+| **捕获付款** | [`POST /api/paypal/capture-order`](src/app/api/paypal/capture-order/route.ts) | 捕获成功后服务端直接发放积分包并记录流水 |
 
 ### 4.3 服务端权威积分系统
 
@@ -140,7 +139,7 @@ Stripe Checkout 真实收款，支持：
 |------|------|-----------|
 | 识图扣减 | **-1** 积分 / 次 | [`POST /api/v1/user/credits`](src/app/api/v1/user/credits/route.ts) |
 | 广告激励 | **+10** 积分 / 次广告观看 | [`POST /api/v1/billing/ad-reward`](src/app/api/v1/billing/ad-reward/route.ts) |
-| 充值 / Pro 解锁 | 支付成功自动记账（+10 积分） | [`POST /api/stripe/webhook`](src/app/api/stripe/webhook/route.ts) + [`subscribe`](src/app/api/v1/billing/subscribe/route.ts) |
+| 积分包充值 | 一次性付款按包到账（10/50/120 积分） | [`POST /api/stripe/webhook`](src/app/api/stripe/webhook/route.ts) + [`capture-order`](src/app/api/paypal/capture-order/route.ts) |
 | 查询 | 返回 `credits` 与 `is_pro` | [`GET /api/v1/user/credits`](src/app/api/v1/user/credits/route.ts) |
 
 核心记账函数（[`src/lib/db/index.ts`](src/lib/db/index.ts:136)）：
@@ -319,7 +318,7 @@ npm run dev
 在 [Stripe Dashboard → Webhooks](https://dashboard.stripe.com/webhooks) 创建 Endpoint：
 
 - **URL**: `https://你的域名/api/stripe/webhook`
-- **事件订阅**: `checkout.session.completed`、`customer.subscription.updated`、`customer.subscription.deleted`、`invoice.payment_succeeded`、`invoice.payment_failed`
+- **事件订阅**: `checkout.session.completed`（一次性付款模式；旧订阅事件已停用）
 - 将 `whsec_` 签名密钥配置到 `STRIPE_WEBHOOK_SECRET`
 
 ### 9.4 配置验证
@@ -333,16 +332,16 @@ node scripts/test-stripe-e2e.mjs       # 支付全链路 E2E
 
 ## 📡 10. API 概览
 
-### 支付与订阅
+### 支付与积分充值（Credits Top-up）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `POST` | `/api/stripe/checkout` | 创建 Stripe Checkout Session（双 Key 校验 + 友好降级） |
 | `POST` | `/api/stripe/webhook` | Stripe Webhook 回调接收 |
 | `POST` | `/api/paypal/create-order` | 创建 PayPal 订单 |
-| `POST` | `/api/paypal/capture-order` | 捕获 PayPal 付款（成功后自动激活 Pro + $1.00 入账） |
-| `GET` | `/api/v1/billing/status` | 查询订阅状态 / 免费额度 / Pro 权限 |
-| `POST` | `/api/v1/billing/subscribe` | 激活订阅（按 order_id 去重） |
+| `POST` | `/api/paypal/capture-order` | 捕获 PayPal 付款（成功后按积分包发放积分） |
+| `GET` | `/api/v1/billing/status` | 查询免费额度 / Pro 权限（旧订阅记录兼容） |
+| `POST` | `/api/v1/billing/subscribe` | 已停用（410）——Credits Top-up 不再激活订阅 |
 | `POST` | `/api/v1/billing/ad-reward` | 广告观看 +10 积分 |
 
 ### 识餐与积分
@@ -351,18 +350,18 @@ node scripts/test-stripe-e2e.mjs       # 支付全链路 E2E
 |------|------|------|
 | `POST` | `/api/v1/meals/analyze-image` | AI 图片食物识别（A→B→C 回退链，WAF 限频 + 反爬） |
 | `POST` | `/api/v1/meals/analyze-text` | AI 文字食物识别 |
-| `GET/POST` | `/api/v1/user/credits` | 积分查询 / 服务端增减（识图 -1、广告 +10、充值 +10） |
+| `GET/POST` | `/api/v1/user/credits` | 积分查询 / 服务端增减（识图 -1、广告 +10、积分包充值） |
 
-### 0-Token 运维后台
+### 运维后台（需管理员令牌）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/api/v1/admin/overview` | 核心指标总览（收入/订阅/访问/识别/错误率） |
-| `GET` | `/api/v1/admin/revenue` | 收入统计（订阅/买断/方案拆分 + 本机流水合并） |
-| `GET` | `/api/v1/admin/traffic` | 访问量与最近 IP |
-| `GET` | `/api/v1/admin/users` | 用户与订阅列表 |
-| `GET` | `/api/v1/admin/logs` | 识图运行日志（模型/耗时/状态码） |
-| `GET` | `/api/v1/admin/model-monitor` | AI 模型健康度 |
+| `GET` | `/api/v1/admin/overview` | 核心指标总览（收入/访问/识别/错误率；`x-admin-token` 鉴权） |
+| `GET` | `/api/v1/admin/revenue` | 收入统计（方案拆分 + 本机流水合并；`x-admin-token` 鉴权） |
+| `GET` | `/api/v1/admin/traffic` | 访问量与最近 IP（`x-admin-token` 鉴权） |
+| `GET` | `/api/v1/admin/users` | 用户列表（`x-admin-token` 鉴权） |
+| `GET` | `/api/v1/admin/logs` | 识图运行日志（`x-admin-token` 鉴权） |
+| `GET` | `/api/v1/admin/model-monitor` | AI 模型健康度（`x-admin-token` 鉴权） |
 
 ---
 

@@ -4,7 +4,8 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { CheckCircle, XCircle, Loader2 } from "lucide-react";
 import { t, useLocale } from "@/lib/i18n";
-import { recordLocalPayment, addCredits, PAYMENT_CREDIT_BONUS } from "@/lib/local-store";
+import { getCreditPack } from "@/lib/credit-packs";
+import { recordLocalPayment, addCredits } from "@/lib/local-store";
 
 function BillingSuccessContent() {
   useLocale();
@@ -13,28 +14,28 @@ function BillingSuccessContent() {
   const [status, setStatus] = useState<"verifying" | "success" | "error">("verifying");
   const [message, setMessage] = useState("");
 
-  // 支付成功后同步本地 Pro 权限（localStorage），供首页/订阅弹窗直接读取
-  const applyLocalPro = (planName: string | null) => {
+  // 支付成功后本地积分包到账（Credits Top-up，无订阅；服务端 Webhook 为权威入账）
+  const applyLocalTopup = (packId: string | null, creditsParam: string | null) => {
     try {
-      localStorage.setItem("user_pro", "true");
-      localStorage.setItem("user_plan", planName || "monthly");
-      localStorage.setItem("user_pro_activated_at", new Date().toISOString());
-      // 充值奖励：购买 $1.00 方案 +10 积分；记录本机支付流水供管理员后台合并展示
+      const pack = getCreditPack(packId);
+      const credits = pack ? pack.credits : Number(creditsParam || 0) || 10;
+      const amount = pack ? pack.priceUsd : 1.0;
+      // 记录本机支付流水供管理员后台合并展示
       recordLocalPayment({
         orderId: searchParams.get("session_id") || `stripe_${Date.now()}`,
         provider: "stripe",
-        plan: planName || "monthly",
-        amount: 1.0,
+        plan: pack ? pack.id : packId || "pack_starter",
+        amount,
       });
-      const next = addCredits(PAYMENT_CREDIT_BONUS);
+      const next = addCredits(credits);
       // 同步服务器持久化积分（跨设备一致）
       const uid = localStorage.getItem("user_id") || "anonymous";
       fetch("/api/v1/user/credits", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: uid, delta: PAYMENT_CREDIT_BONUS, action: "purchase" }),
+        body: JSON.stringify({ user_id: uid, delta: credits, action: "purchase" }),
       }).catch(() => {});
-      console.log(`[BillingSuccess] 充值奖励 +${PAYMENT_CREDIT_BONUS} 积分，余额 ${next}`);
+      console.log(`[BillingSuccess] 积分包到账 +${credits} 积分，余额 ${next}`);
     } catch (err) {
       console.error("[BillingSuccess] localStorage 写入失败:", err);
     }
@@ -42,13 +43,14 @@ function BillingSuccessContent() {
 
   useEffect(() => {
     const sessionId = searchParams.get("session_id");
-    const plan = searchParams.get("plan");
+    const packId = searchParams.get("pack_id");
+    const creditsParam = searchParams.get("credits");
     const isMock = searchParams.get("mock") === "true";
 
     if (isMock) {
-      applyLocalPro(plan);
+      applyLocalTopup(packId, creditsParam);
       setStatus("success");
-      setMessage(t("billing_success_mock", { plan: plan || t("billing_monthly") }));
+      setMessage(t("billing_success_credits", { credits: creditsParam || "10" }));
       return;
     }
 
@@ -58,34 +60,10 @@ function BillingSuccessContent() {
       return;
     }
 
-    // 服务端激活订阅并累加 $1.00 收入（Stripe webhook 未配置/延迟时的兜底，按 order_id 去重）
-    const uid = localStorage.getItem("user_id") || "anonymous";
-    const email = localStorage.getItem("user_email") || "";
-    fetch(
-      `/api/v1/billing/subscribe?plan=${plan}&user_id=${encodeURIComponent(uid)}&email=${encodeURIComponent(email)}&provider=stripe&order_id=${encodeURIComponent(sessionId)}`,
-      { method: "POST" }
-    ).catch(() => {});
-
-    // 验证支付状态
-    fetch(`/api/v1/billing/status?session_id=${sessionId}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.is_premium) {
-          applyLocalPro(plan);
-          setStatus("success");
-          setMessage(t("billing_success_activated"));
-        } else {
-          // 支付可能还在处理中，Webhook 尚未触发
-          applyLocalPro(plan);
-          setStatus("success");
-          setMessage(t("billing_success_pending"));
-        }
-      })
-      .catch(() => {
-        applyLocalPro(plan);
-        setStatus("success");
-        setMessage(t("billing_success_thanks"));
-      });
+    // 本地即时到账（Webhook 会在服务端权威入账，幂等去重）
+    applyLocalTopup(packId, creditsParam);
+    setStatus("success");
+    setMessage(t("billing_success_credits", { credits: creditsParam || "10" }));
   }, [searchParams]);
 
   return (

@@ -1,61 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { activateSubscription } from "@/lib/billing-activate";
-import { db } from "@/lib/db";
 
 /**
- * POST /api/v1/billing/subscribe?plan=monthly&user_id=xxx&email=xxx&provider=paypal&order_id=xxx
+ * POST /api/v1/billing/subscribe（已停用）
  *
- * PayPal 支付完成后，手动激活订阅（因为 PayPal 无 webhook）。
- * Stripe 支付由 webhook 自动处理。
+ * 商业化已切换为 Credits Top-up（积分充值/按次付费）一次性付款：
+ *   - Stripe：由 /api/stripe/webhook（checkout.session.completed）直接发放积分；
+ *   - PayPal：由 /api/paypal/capture-order 捕获成功后直接发放积分。
+ * 本订阅激活接口不再使用，返回 410 防止旧客户端误调用。
  */
 export async function POST(request: NextRequest) {
-  try {
-    const { searchParams } = new URL(request.url);
-    const plan = searchParams.get("plan") || "monthly";
-    const userId = searchParams.get("user_id");
-    const email = searchParams.get("email");
-    const provider = searchParams.get("provider") || "paypal";
-    const orderId = searchParams.get("order_id");
-
-    if (!userId && !email) {
-      return NextResponse.json(
-        { error: "缺少用户标识 (user_id 或 email)" },
-        { status: 400 },
-      );
-    }
-
-    const effectiveUserId = userId || email || `paypal_${orderId || Date.now()}`;
-    const record = await activateSubscription({
-      userId: effectiveUserId,
-      email: email || "",
-      plan: plan as "monthly" | "yearly" | "permanent",
-      provider: provider as "stripe" | "paypal",
-      orderId: orderId || undefined,
-    });
-
-    // 统一测试价 $1.00 入账（按 order_id 去重；PayPal 主路径已在 capture 入账，此路径为兜底）
-    await db.recordPayment({
-      orderId: orderId || `sub_${Date.now()}`,
-      provider: provider as "stripe" | "paypal",
-      plan: plan as "monthly" | "yearly" | "permanent",
-      amount: 1.0,
-      email: email || "",
-    });
-
-    return NextResponse.json({
-      status: "ok",
-      message: `订阅成功 (${plan})`,
-      subscription_id: `sub_${Date.now()}`,
-      user_id: effectiveUserId,
-      plan: record.plan,
-      is_permanent: record.is_permanent,
-      current_period_end: record.current_period_end,
-    });
-  } catch (error: any) {
-    console.error("[Billing Subscribe Error]", error);
-    return NextResponse.json(
-      { error: error.message || "订阅处理失败" },
-      { status: 500 },
-    );
-  }
+  return NextResponse.json(
+    {
+      error: "DEPRECATED",
+      detail: "订阅接口已停用：商业化已切换为 Credits Top-up 一次性积分充值，请使用积分包支付。",
+    },
+    { status: 410 }
+  );
 }

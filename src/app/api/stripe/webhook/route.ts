@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db, addServerCredits } from "@/lib/db";
 
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
@@ -7,15 +7,11 @@ const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 /**
  * POST /api/stripe/webhook
  *
- * 接收 Stripe Webhook 事件，更新用户订阅/授权状态。
- * 使用 billing-store 持久化订阅信息。
+ * 接收 Stripe Webhook 事件，为 Credits Top-up（积分充值/按次付费）记账。
  *
  * 监听事件:
- *   - checkout.session.completed  → 支付成功，激活订阅
- *   - invoice.payment_succeeded   → 续费成功，延长有效期
- *   - customer.subscription.updated → 订阅方案变更
- *   - customer.subscription.deleted → 订阅取消/过期
- *   - invoice.payment_failed      → 续费失败
+ *   - checkout.session.completed  → 一次性付款成功，按 metadata 发放积分包并记录流水
+ *   - customer.subscription.* / invoice.* → 旧订阅事件，仅记录日志忽略（已取消订阅模式）
  */
 export async function POST(request: NextRequest) {
   try {
@@ -49,7 +45,7 @@ export async function POST(request: NextRequest) {
     switch (event.type) {
       // ═══════════════════════════════════════════════════
       //  checkout.session.completed
-      //  支付/订阅创建成功 → 激活用户权限
+      //  一次性付款成功 → 按 metadata 发放积分包并记录流水
       // ═══════════════════════════════════════════════════
       case "checkout.session.completed": {
         const session = event.data.object as any;
@@ -58,142 +54,63 @@ export async function POST(request: NextRequest) {
         // 获取用户标识（优先 metadata.user_id，其次 customer_email）
         const userId = session.metadata?.user_id || session.customer_details?.email || `stripe_${session.customer}`;
         const email = session.metadata?.email || session.customer_details?.email || "";
-        const planType = session.metadata?.plan_type || "subscription";
-        const plan = session.metadata?.plan || "monthly";
-        const isPermanent = planType === "license" || plan === "permanent";
+        const packId = session.metadata?.pack_id || "";
+        const credits = Number(session.metadata?.credits || 0);
+        const amountUsd = Number(session.metadata?.amount_usd || 1.0);
 
-        // 计算到期时间
-        const now = new Date();
-        let periodEnd: Date;
-        if (isPermanent) {
-          periodEnd = new Date("2099-12-31T23:59:59Z");
-        } else if (plan === "yearly") {
-          periodEnd = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate());
-        } else {
-          periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, now.getDate());
+        if (!packId || !Number.isFinite(credits) || credits <= 0) {
+          console.warn("[Stripe Webhook] 非积分包会话，跳过入账:", session.id);
+          break;
         }
 
-        // 存储订阅记录
-        await db.upsertSubscription(userId, {
-          email,
-          plan_type: planType as "subscription" | "license",
-          plan: plan as "monthly" | "yearly" | "permanent",
-          is_active: true,
-          is_permanent: isPermanent,
-          stripe_customer_id: session.customer,
-          stripe_subscription_id: session.subscription,
-          stripe_session_id: session.id,
-          provider: "stripe",
-          current_period_start: now.toISOString(),
-          current_period_end: periodEnd.toISOString(),
-        });
-
-        // 统一测试价 $1.00 入账（按 session.id 去重，幂等）
+        // 服务端权威发放积分（幂等：recordPayment 按 session.id 去重，二次事件不重复入账）
+        const next = await addServerCredits(userId, credits);
         await db.recordPayment({
           orderId: session.id,
           provider: "stripe",
-          plan: plan as "monthly" | "yearly" | "permanent",
-          amount: 1.0,
+          plan: packId,
+          amount: amountUsd,
           email,
         });
 
-        console.log(`[Stripe Webhook] ✅ 订阅已激活: userId=${userId}, plan=${plan}, ends=${periodEnd.toISOString()}`);
+        console.log(`[Stripe Webhook] ✅ 积分包到账: userId=${userId}, pack=${packId}, +${credits} → ${next}`);
         break;
       }
 
       // ═══════════════════════════════════════════════════
-      //  customer.subscription.updated
-      //  订阅变更 → 同步更新本地记录
+      //  旧订阅事件（已取消订阅套路，Credits Top-up 一次性付费模式）
+      //  仅记录日志忽略，不再激活/续费/停用任何订阅权限
       // ═══════════════════════════════════════════════════
       case "customer.subscription.updated": {
         const subscription = event.data.object as any;
-        console.log("[Stripe Webhook] Subscription updated:", subscription.id);
-
-        // 通过 stripe_subscription_id 查找本地记录
-        const existing = await db.getSubscriptionByStripeSubscriptionId(subscription.id);
-        if (!existing) {
-          // 尝试通过 customer ID 查找
-          const byCustomer = await db.getSubscriptionByStripeCustomerId(subscription.customer);
-          if (byCustomer) {
-            await db.upsertSubscription(byCustomer.user_id, {
-              stripe_subscription_id: subscription.id,
-              plan: subscription.items?.data?.[0]?.price?.recurring?.interval === "year" ? "yearly" : "monthly",
-              is_active: subscription.status === "active" || subscription.status === "trialing",
-              current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
-              current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
-            });
-          }
-        } else {
-          await db.upsertSubscription(existing.user_id, {
-            plan: subscription.items?.data?.[0]?.price?.recurring?.interval === "year" ? "yearly" : "monthly",
-            is_active: subscription.status === "active" || subscription.status === "trialing",
-            current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
-            current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
-          });
-        }
+        console.log("[Stripe Webhook] 旧订阅事件已忽略（Credits Top-up 模式）: subscription.updated", subscription.id);
         break;
       }
 
       // ═══════════════════════════════════════════════════
-      //  customer.subscription.deleted
-      //  订阅取消/过期 → 停用权限
+      //  customer.subscription.deleted（旧订阅事件，忽略）
       // ═══════════════════════════════════════════════════
       case "customer.subscription.deleted": {
         const subscription = event.data.object as any;
-        console.log("[Stripe Webhook] Subscription deleted:", subscription.id);
-
-        const existing = await db.getSubscriptionByStripeSubscriptionId(subscription.id);
-        if (existing) {
-          await db.deactivateSubscription(existing.user_id);
-          console.log(`[Stripe Webhook] 🔴 订阅已停用: userId=${existing.user_id}`);
-        } else {
-          console.log("[Stripe Webhook] 未找到对应本地记录的订阅:", subscription.id);
-        }
+        console.log("[Stripe Webhook] 旧订阅事件已忽略（Credits Top-up 模式）: subscription.deleted", subscription.id);
         break;
       }
 
       // ═══════════════════════════════════════════════════
-      //  invoice.payment_succeeded
-      //  续费成功 → 延长有效期
+      //  invoice.payment_succeeded（旧订阅事件，忽略）
       // ═══════════════════════════════════════════════════
       case "invoice.payment_succeeded": {
         const invoice = event.data.object as any;
-        console.log("[Stripe Webhook] Invoice paid:", invoice.id);
-
-        if (invoice.subscription) {
-          const existing = await db.getSubscriptionByStripeSubscriptionId(invoice.subscription);
-          if (existing) {
-            // 获取 Stripe 订阅的最新信息
-            try {
-              const updatedSub = (await stripe.subscriptions.retrieve(invoice.subscription)) as any;
-              await db.upsertSubscription(existing.user_id, {
-                is_active: true,
-                current_period_start: new Date(updatedSub.current_period_start * 1000).toISOString(),
-                current_period_end: new Date(updatedSub.current_period_end * 1000).toISOString(),
-              });
-              console.log(`[Stripe Webhook] 💳 续费成功: userId=${existing.user_id}, new_end=${new Date(updatedSub.current_period_end * 1000).toISOString()}`);
-            } catch (err) {
-              console.error("[Stripe Webhook] 获取订阅详情失败:", err);
-            }
-          }
-        }
+        console.log("[Stripe Webhook] 旧订阅事件已忽略（Credits Top-up 模式）: invoice.payment_succeeded", invoice.id);
         break;
       }
 
       // ═══════════════════════════════════════════════════
-      //  invoice.payment_failed
-      //  续费失败 → 记录日志
+      //  invoice.payment_failed（旧订阅事件，忽略）
       // ═══════════════════════════════════════════════════
       case "invoice.payment_failed": {
         const invoice = event.data.object as any;
-        console.log("[Stripe Webhook] ❌ Invoice payment failed:", invoice.id);
-
-        if (invoice.subscription) {
-          const existing = await db.getSubscriptionByStripeSubscriptionId(invoice.subscription);
-          if (existing) {
-            console.warn(`[Stripe Webhook] ⚠️ 用户 ${existing.user_id} 续费失败，订阅 ${invoice.subscription}`);
-          }
-        }
+        console.log("[Stripe Webhook] 旧订阅事件已忽略（Credits Top-up 模式）: invoice.payment_failed", invoice.id);
         break;
       }
 

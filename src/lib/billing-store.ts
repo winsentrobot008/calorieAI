@@ -51,8 +51,8 @@ export interface PaymentRecord {
   order_id: string;
   /** 支付渠道: "stripe" | "paypal" */
   provider: "stripe" | "paypal";
-  /** 方案标识 */
-  plan: "monthly" | "yearly" | "permanent";
+  /** 方案标识（Credits Top-up 积分包 id） */
+  plan: string;
   /** 支付金额（USD） */
   amount: number;
   /** 货币 */
@@ -243,7 +243,7 @@ export function getPermanentLicenseCount(): number {
 export function recordPayment(input: {
   orderId: string;
   provider: "stripe" | "paypal";
-  plan: "monthly" | "yearly" | "permanent";
+  plan: string; // Credits Top-up 积分包 id
   amount: number;
   currency?: string;
   email?: string;

@@ -179,13 +179,9 @@ async function main() {
     ok("Webhook API 端点存在: POST /api/stripe/webhook");
     const webhookCode = fs.readFileSync(webhookPath, "utf-8");
 
-    const expectedEvents = [
-      "checkout.session.completed",
-      "invoice.payment_succeeded",
-      "customer.subscription.updated",
-      "customer.subscription.deleted",
-      "invoice.payment_failed",
-    ];
+    // Credits Top-up 一次性付款：仅需 checkout.session.completed
+    // （旧订阅事件已停用，代码中仅作忽略日志处理）
+    const expectedEvents = ["checkout.session.completed"];
 
     for (const event of expectedEvents) {
       if (webhookCode.includes(event)) {
@@ -238,12 +234,8 @@ async function main() {
   3. Endpoint URL 填入:
      ${C.green}${deployUrl}/api/stripe/webhook${C.reset}
 
-  4. 在 "Events to send" 中选择以下事件:
+  4. 在 "Events to send" 中选择以下事件（Credits Top-up 一次性付款）:
      ${C.yellow}☑ checkout.session.completed${C.reset}
-     ${C.yellow}☑ customer.subscription.updated${C.reset}
-     ${C.yellow}☑ customer.subscription.deleted${C.reset}
-     ${C.yellow}☑ invoice.payment_succeeded${C.reset}
-     ${C.yellow}☑ invoice.payment_failed${C.reset}
 
   5. 点击 ${C.bold}"Add endpoint"${C.reset}
 
@@ -275,8 +267,6 @@ async function main() {
 
   触发测试事件:
   ${C.cyan}stripe trigger checkout.session.completed${C.reset}
-  ${C.cyan}stripe trigger customer.subscription.created${C.reset}
-  ${C.cyan}stripe trigger invoice.payment_succeeded${C.reset}
     `);
   } catch {
     info("Stripe CLI 未安装");

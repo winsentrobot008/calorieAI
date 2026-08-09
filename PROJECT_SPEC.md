@@ -115,10 +115,10 @@ src/
 
 | 渠道 | 说明 |
 |------|------|
-| Stripe（主） | `/api/stripe/checkout` + `/api/stripe/webhook`；信用卡/Apple Pay/Link/支付宝/微信支付 |
-| PayPal（辅） | `/api/paypal/create-order` + `/api/paypal/capture-order`；微额支付申请逻辑与兜底逻辑 |
-| 订阅状态 | `/api/v1/billing/status` / `subscribe` / `license` / `ad-reward`；持久化经 DAL 写入（Postgres/KV/文件） |
-| 积分系统 | 服务端权威：`GET/POST /api/v1/user/credits`；识图 **-1**、广告 **+10**、充值/Pro 解锁；`initCreditsIfMissing`（新用户赠送 3）+ `addServerCredits`（不低于 0） |
+| Stripe（主） | `/api/stripe/checkout` + `/api/stripe/webhook`；**Credits Top-up 一次性付款**（信用卡/Apple Pay/Link/支付宝/微信支付，无订阅） |
+| PayPal（辅） | `/api/paypal/create-order` + `/api/paypal/capture-order`；按积分包一次性收款 |
+| 订阅状态 | `/api/v1/billing/status` / `ad-reward`；`subscribe` / `license` 已停用（410）；持久化经 DAL 写入（Postgres/KV/文件） |
+| 积分系统 | 服务端权威：`GET/POST /api/v1/user/credits`；识图 **-1**、广告 **+10**、积分包一次性到账；`initCreditsIfMissing`（新用户赠送 3）+ `addServerCredits`（不低于 0） |
 | 降级 | 未配置真实密钥时前后端自动进入 **mock 演示模式** |
 
 ## 6. 交付前 Agent 自检协议
@@ -173,7 +173,7 @@ TARGET_URL=https://calorie-ai-seven.vercel.app npx playwright test tests/hydrati
 
 ### 9.2 开发规范
 - **i18n**：文案一律走 `t("key")`，字典 `src/lib/i18n/{zh,en}.json`，禁止硬编码。
-- **支付**：未配密钥走 mock 模拟；Webhook → `billing-store` → `data/subscriptions.json`。
+- **支付**：未配密钥走 mock 模拟；Stripe Webhook（`checkout.session.completed`）与 PayPal capture 按积分包发放积分 → `billing-store` 记账。
 - **命令**：`npm run dev` / `build` / `lint` / `test:routes` / `test:api`。
 - **环境变量**：见 `.env.example`；`.env.local`、`*.backup` 不入库。
 

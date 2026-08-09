@@ -5,6 +5,7 @@ import { useTheme } from "@/components/theme-provider";
 import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
 import { Sun, Moon, Mic, X } from "lucide-react";
 import { t, useLocale } from "@/lib/i18n";
+import { CREDIT_PACKS, type CreditPack } from "@/lib/credit-packs";
 import LocaleSwitcher from "@/components/locale-switcher";
 import {
   readCredits,
@@ -15,7 +16,6 @@ import {
   localPaymentStats,
   AD_REWARD_CREDITS,
   AD_COUNTDOWN_SECONDS,
-  PAYMENT_CREDIT_BONUS,
   DEFAULT_CREDITS,
 } from "@/lib/local-store";
 
@@ -567,76 +567,54 @@ function BillingModal({
 }: {
   onClose: () => void;
   addLog: (msg: string) => void;
-  onPaymentSuccess: () => void;
+  onPaymentSuccess: (creditsAdded: number) => void;
 }) {
-  const [activeTab, setActiveTab] = useState("subscription");
-  const [selectedPlan, setSelectedPlan] = useState<string | null>(null);
+  const [selectedPack, setSelectedPack] = useState<CreditPack | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodType | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [paypalKey, setPaypalKey] = useState(0);
-  const [isPro, setIsPro] = useState(false);
 
   const paypalClientId =
     process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID || "demo";
 
   const isPaypalDemo = paypalClientId === "demo" || paypalClientId === "YOUR_PAYPAL_CLIENT_ID_HERE";
 
-  // 统一测试价 $1.00（与后端 PayPal / Stripe 价格一致）
-  const TEST_PRICE_USD = "1.00";
-  const TEST_PRICE_CNY = `¥${Math.round(1 * 7.2)}`;
-
-  // 读取本地 Pro 权限状态（支付成功后由 applyProState 写入）
-  useEffect(() => {
-    if (typeof window !== "undefined" && localStorage.getItem("user_pro") === "true") {
-      setIsPro(true);
-    }
-  }, []);
-
   // 获取当前用户信息
   const getUserId = () => typeof window !== "undefined" ? localStorage.getItem("user_id") || "anonymous" : "anonymous";
   const getUserEmail = () => typeof window !== "undefined" ? localStorage.getItem("user_email") || "" : "";
 
-  // 支付成功后：写入本地 Pro 权限并刷新用户状态
-  const applyProState = (plan: string) => {
-    localStorage.setItem("user_pro", "true");
-    localStorage.setItem("user_plan", plan);
-    localStorage.setItem("user_pro_activated_at", new Date().toISOString());
-    setIsPro(true);
-    addLog(`[BILLING] Pro 权限已激活并写入本地状态: plan=${plan}`);
+  // 支付完成统一处理：本地记录流水 + 积分到账（Credits Top-up，无订阅）
+  const finishPayment = (pack: CreditPack, provider: "stripe" | "paypal", orderId?: string, creditsAdded?: number) => {
+    recordLocalPayment({ orderId: orderId || `pay_${Date.now()}`, provider, plan: pack.id, amount: pack.priceUsd });
+    onPaymentSuccess(creditsAdded ?? pack.credits);
+    addLog(`[BILLING] 支付完成: ${pack.id}（${provider}）入账 $${pack.priceUsd.toFixed(2)}，+${creditsAdded ?? pack.credits} 积分`);
   };
 
-  // 支付完成统一处理：升级 Pro + 本地记录 $1.00 流水 + 充值奖励 10 积分
-  const finishPayment = (plan: string, provider: "stripe" | "paypal", orderId?: string) => {
-    applyProState(plan);
-    recordLocalPayment({ orderId: orderId || `pay_${Date.now()}`, provider, plan, amount: 1.0 });
-    onPaymentSuccess();
-    addLog(`[BILLING] 支付完成: ${plan}（${provider}）入账 $1.00，+${PAYMENT_CREDIT_BONUS} 积分`);
-  };
-
-  // ── Select plan → reset payment method ──────────────
-  const handleSelectPlan = (plan: string) => {
-    setSelectedPlan(plan);
+  // ── Select pack → reset payment method ──────────────
+  const handleSelectPack = (packId: string) => {
+    const pack = CREDIT_PACKS.find((p) => p.id === packId) || null;
+    setSelectedPack(pack);
     setPaymentMethod(null);
     setMessage("");
-    addLog(`[BILLING] 已选择方案: ${plan}`);
+    addLog(`[BILLING] 已选择积分包: ${packId}`);
   };
 
   // ═══════════════════════════════════════════════════════
   //  STRIPE (信用卡 / 支付宝 / 微信支付)
   // ═══════════════════════════════════════════════════════
   const handleStripeCheckout = async () => {
-    if (!selectedPlan || !paymentMethod) return;
+    if (!selectedPack || !paymentMethod) return;
     setLoading(true);
     setMessage("");
-    addLog(`[Stripe] 正在创建 ${selectedPlan} 支付会话 (${paymentMethod})...`);
+    addLog(`[Stripe] 正在创建 ${selectedPack.id} 支付会话 (${paymentMethod})...`);
 
     try {
       const res = await fetch("/api/stripe/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          plan: selectedPlan,
+          pack_id: selectedPack.id,
           payment_method: paymentMethod === "card" ? "card" : paymentMethod, // "alipay" | "wechat_pay"
           user_id: getUserId(),
           email: getUserEmail(),
@@ -650,9 +628,9 @@ function BillingModal({
       }
 
       if (data.mock) {
-        finishPayment(selectedPlan, "stripe", data.sessionId);
-        setMessage(`✅ 演示模式 — ${selectedPlan} 购买成功`);
-        addLog(`[Stripe] 演示模式: ${selectedPlan} 购买成功`);
+        finishPayment(selectedPack, "stripe", data.sessionId, data.credits || selectedPack.credits);
+        setMessage(`✅ 演示模式 — ${selectedPack.credits} 积分包购买成功`);
+        addLog(`[Stripe] 演示模式: ${selectedPack.id} 购买成功`);
         setLoading(false);
         return;
       }
@@ -676,12 +654,12 @@ function BillingModal({
   //  PAYPAL (Secondary)
   // ═══════════════════════════════════════════════════════
   const createPayPalOrder = async (): Promise<string> => {
-    if (!selectedPlan) throw new Error(t("billing_error_select_plan_first"));
-    addLog(`[PayPal] 正在创建订单 (${selectedPlan})...`);
+    if (!selectedPack) throw new Error(t("billing_error_select_plan_first"));
+    addLog(`[PayPal] 正在创建订单 (${selectedPack.id})...`);
     const res = await fetch("/api/paypal/create-order", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ plan: selectedPlan }),
+      body: JSON.stringify({ pack_id: selectedPack.id }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || t("paypal_error_create"));
@@ -703,36 +681,21 @@ function BillingModal({
           orderId: data.orderID,
           user_id: getUserId(),
           email: getUserEmail(),
-          plan: selectedPlan,
+          pack_id: selectedPack?.id,
         }),
       });
       const capture = await res.json();
       if (!res.ok) throw new Error(capture.error || t("paypal_error_capture"));
       if (capture.mock) {
         addLog(`[PayPal] 演示模式: 捕获成功 (模拟)`);
-        finishPayment(selectedPlan || "monthly", "paypal", data.orderID);
-        setMessage(`✅ 演示模式 — ${selectedPlan} 购买成功，Pro 权限已激活`);
+        finishPayment(selectedPack!, "paypal", data.orderID, capture.credits_added || selectedPack!.credits);
+        setMessage(`✅ 演示模式 — ${selectedPack!.credits} 积分包购买成功`);
         return;
       }
       if (capture.status === "COMPLETED") {
         addLog(`[PayPal] 支付成功! 订单 ${capture.id}, 金额 $${capture.amount?.value || "?"}`);
-
-        const userId = getUserId();
-        const email = getUserEmail();
-        if (capture.pro) {
-          // capture 路由已在服务端激活订阅，前端只需同步本地 Pro 状态
-          finishPayment(selectedPlan || "monthly", "paypal", data.orderID);
-          addLog(`[PayPal] 服务端订阅已激活: userId=${userId}, plan=${selectedPlan}`);
-        } else {
-          // 兜底：服务端激活失败时手动调用订阅接口
-          await fetch(
-            `/api/v1/billing/subscribe?plan=${selectedPlan}&user_id=${encodeURIComponent(userId)}&email=${encodeURIComponent(email)}&provider=paypal&order_id=${data.orderID}`,
-            { method: "POST" }
-          );
-          finishPayment(selectedPlan || "monthly", "paypal", data.orderID);
-          addLog(`[PayPal] 订阅已通过备用接口激活: userId=${userId}, plan=${selectedPlan}`);
-        }
-        setMessage(`✅ 支付成功! ${selectedPlan} 方案 Pro 权限已激活 🎉`);
+        finishPayment(selectedPack!, "paypal", data.orderID, capture.credits_added || selectedPack!.credits);
+        setMessage(`✅ 支付成功! ${selectedPack!.credits} 积分已到账 🎉`);
       } else {
         addLog(`[PayPal] 支付状态异常: ${capture.status}`);
         setMessage(`⚠️ 支付状态: ${capture.status}`);
@@ -749,83 +712,43 @@ function BillingModal({
     setMessage(`❌ ${errMsg}`);
   };
 
-  // ── Price config ────────────────────────────────────
-  const plans = [
-    { plan: "monthly", label: "月付", price: 1, popular: false },
-    { plan: "yearly", label: "年付", price: 1, popular: true },
-  ];
-
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content billing-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>{t("billing_upgrade_pro")}</h2>
+          <h2>{t("billing_credits_topup")}</h2>
           <button className="modal-close" onClick={onClose}><X className="h-5 w-5" /></button>
         </div>
         <div className="billing-status-bar">
-          <span className={`badge ${isPro ? "badge-pro" : "badge-free"}`}>
-            {isPro
-              ? t("billing_pro_user", { plan: (typeof window !== "undefined" ? localStorage.getItem("user_plan") : null) || "monthly" })
-              : t("billing_free_user")}
-          </span>
+          <span className="badge badge-free">{t("billing_topup_note")}</span>
         </div>
         {message && <div className="billing-message">{message}</div>}
 
-        {/* ─── Tab: 订阅 / 买断 ─────────────────────────── */}
-        <div className="billing-tabs">
-          <button
-            className={`billing-tab ${activeTab === "subscription" ? "active" : ""}`}
-            onClick={() => { setActiveTab("subscription"); setSelectedPlan(null); setPaymentMethod(null); }}
-          >
-            {t("billing_subscription")}
-          </button>
-          <button
-            className={`billing-tab ${activeTab === "license" ? "active" : ""}`}
-            onClick={() => { setActiveTab("license"); setSelectedPlan(null); setPaymentMethod(null); }}
-          >
-            {t("billing_license")}
-          </button>
-        </div>
-
-        {/* ─── Plan Cards ──────────────────────────────── */}
-        {activeTab === "subscription" && (
-          <div className="plan-grid">
-            {plans.map((p) => (
-              <div key={p.plan} className={`plan-card ${p.popular ? "popular" : ""} ${selectedPlan === p.plan ? "selected" : ""}`}>
-                {p.popular && <div className="plan-badge">{t("billing_most_popular")}</div>}
-                <div className="plan-name">{t(p.plan === "monthly" ? "billing_monthly" : "billing_yearly")}</div>
-                <div className="plan-price">
-                  <span className="price">${p.price.toFixed(2)}</span>
-                  <span className="period">{t(p.plan === "monthly" ? "billing_period_month" : "billing_period_year")}</span>
-                </div>
-                {p.plan === "yearly" && <div className="plan-save">{t("billing_save_yearly")}</div>}
-                <ul className="plan-features">
-                  <li>{t("billing_features_unlimited")}</li><li>{t("billing_features_nutrition")}</li><li>{t("billing_features_trends")}</li><li>{t("billing_features_suggestions")}</li><li>{t("billing_features_noads")}</li>
-                </ul>
-                <button className="btn-primary plan-btn" onClick={() => handleSelectPlan(p.plan)}>
-                  {t("billing_select_plan", { plan: t(p.plan === "monthly" ? "billing_monthly" : "billing_yearly") })}
-                </button>
+        {/* ─── Credits Top-up 积分包（一次性付款，无订阅）─── */}
+        <div className="plan-grid">
+          {CREDIT_PACKS.map((pack, idx) => (
+            <div key={pack.id} className={`plan-card ${idx === 1 ? "popular" : ""} ${selectedPack?.id === pack.id ? "selected" : ""}`}>
+              {idx === 1 && <div className="plan-badge">{t("billing_most_popular")}</div>}
+              <div className="plan-name">{t(pack.labelKey)}</div>
+              <div className="plan-price">
+                <span className="price">${pack.priceUsd.toFixed(2)}</span>
+                <span className="period">{t("billing_one_time")}</span>
               </div>
-            ))}
-          </div>
-        )}
-
-        {activeTab === "license" && (
-          <div className="license-section">
-            <div className={`plan-card permanent-card ${selectedPlan === "permanent" ? "selected" : ""}`}>
-              <div className="plan-name">{t("billing_license")}</div>
-              <div className="plan-price"><span className="price">${TEST_PRICE_USD}</span><span className="period">{t("billing_one_time")}</span></div>
-              <ul className="plan-features"><li>{t("billing_features_all")}</li><li>{t("billing_features_lifetime")}</li><li>{t("billing_features_noads")}</li><li>{t("billing_features_early_access")}</li><li>{t("billing_features_free_updates")}</li></ul>
-              <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", margin: "4px 0 12px" }}>{t("billing_license_value")}</div>
-              <button className="btn-primary plan-btn btn-license" onClick={() => handleSelectPlan("permanent")}>
-                {t("billing_select_permanent")}
+              <div className="plan-save">{pack.credits} {t("credits_label")}</div>
+              <ul className="plan-features">
+                <li>{t("billing_pack_feature_pay_per_use")}</li>
+                <li>{t("billing_pack_feature_never_expire")}</li>
+                <li>{t("billing_pack_feature_1credit_per_scan")}</li>
+              </ul>
+              <button className="btn-primary plan-btn" onClick={() => handleSelectPack(pack.id)}>
+                {t("billing_select_pack", { credits: pack.credits, price: `$${pack.priceUsd.toFixed(2)}` })}
               </button>
             </div>
-          </div>
-        )}
+          ))}
+        </div>
 
         {/* ─── Payment Method Selection ────────────────── */}
-        {selectedPlan && !paymentMethod && (
+        {selectedPack && !paymentMethod && (
           <div className="payment-method-section" style={{ marginTop: 16 }}>
             <div className="section-label" style={{ textAlign: "center", fontSize: 12, color: "#94a3b8", marginBottom: 10 }}>
               {t("billing_payment_method")}
@@ -863,7 +786,7 @@ function BillingModal({
         )}
 
         {/* ─── Stripe Checkout Buttons ─────────────────── */}
-        {selectedPlan && (paymentMethod === "card" || paymentMethod === "alipay" || paymentMethod === "wechat_pay") && (
+        {selectedPack && (paymentMethod === "card" || paymentMethod === "alipay" || paymentMethod === "wechat_pay") && (
           <div className="stripe-section" style={{ marginTop: 16 }}>
             <button
               className="btn-primary stripe-pay-btn"
@@ -877,9 +800,9 @@ function BillingModal({
                 </span>
               ) : (
                 <>
-                  {paymentMethod === "card" && t("billing_pay_btn_card", { amount: `$${TEST_PRICE_USD}` })}
-                  {paymentMethod === "alipay" && t("billing_pay_btn_alipay", { amount: TEST_PRICE_CNY })}
-                  {paymentMethod === "wechat_pay" && t("billing_pay_btn_wechat", { amount: TEST_PRICE_CNY })}
+                  {paymentMethod === "card" && t("billing_pay_btn_card", { amount: `$${selectedPack.priceUsd.toFixed(2)}` })}
+                  {paymentMethod === "alipay" && t("billing_pay_btn_alipay", { amount: `¥${Math.round(selectedPack.priceUsd * 7.2)}` })}
+                  {paymentMethod === "wechat_pay" && t("billing_pay_btn_wechat", { amount: `¥${Math.round(selectedPack.priceUsd * 7.2)}` })}
                 </>
               )}
             </button>
@@ -894,16 +817,16 @@ function BillingModal({
         )}
 
         {/* ─── PayPal Buttons ──────────────────────────── */}
-        {selectedPlan && paymentMethod === "paypal" && (
+        {selectedPack && paymentMethod === "paypal" && (
           <div className="paypal-section" style={{ marginTop: 16, padding: "0 4px" }}>
             {isPaypalDemo ? (
               <button
                 className="btn-primary"
                 style={{ width: "100%", padding: "12px 0", fontSize: 15 }}
                 onClick={() => {
-                  addLog(`[PayPal Demo] 模拟支付成功: ${selectedPlan}`);
-                  finishPayment(selectedPlan || "monthly", "paypal");
-                  setMessage(`✅ 演示模式 — ${selectedPlan} 购买成功，Pro 权限已激活`);
+                  addLog(`[PayPal Demo] 模拟支付成功: ${selectedPack.id}`);
+                  finishPayment(selectedPack, "paypal");
+                  setMessage(`✅ 演示模式 — ${selectedPack.credits} 积分包购买成功`);
                 }}
               >
                 {t("billing_paypal_demo")}
@@ -953,7 +876,13 @@ function AdminLoginPage({ onLogin }: { onLogin: (s: any) => void }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.detail || "用户名或密码错误");
-      onLogin({ adminId: data.admin_id, username: data.username, role: data.role, displayName: data.display_name });
+      onLogin({
+        adminId: data.admin_id,
+        username: data.username,
+        role: data.role,
+        displayName: data.display_name,
+        token: data.token,
+      });
     } catch (err: any) {
       setError(err.message || "用户名或密码错误");
     }
@@ -979,22 +908,23 @@ function AdminDashboardPage({ session, onLogout }: { session: any; onLogout: () 
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
+    const headers = { "x-admin-token": session?.token || "" };
     setRefreshing(true);
     try {
       const [overview, revenue, traffic, logsRes, usersRes, models] = await Promise.all([
-        fetch("/api/v1/admin/overview").then((r) => r.json()),
-        fetch("/api/v1/admin/revenue").then((r) => r.json()),
-        fetch("/api/v1/admin/traffic").then((r) => r.json()),
-        fetch("/api/v1/admin/logs").then((r) => r.json()),
-        fetch("/api/v1/admin/users").then((r) => r.json()),
-        fetch("/api/v1/admin/model-monitor").then((r) => r.json()),
+        fetch("/api/v1/admin/overview", { headers }).then((r) => r.json()),
+        fetch("/api/v1/admin/revenue", { headers }).then((r) => r.json()),
+        fetch("/api/v1/admin/traffic", { headers }).then((r) => r.json()),
+        fetch("/api/v1/admin/logs", { headers }).then((r) => r.json()),
+        fetch("/api/v1/admin/users", { headers }).then((r) => r.json()),
+        fetch("/api/v1/admin/model-monitor", { headers }).then((r) => r.json()),
       ]);
       setData({ overview, revenue, traffic, logs: logsRes.logs || [], users: usersRes.users || [], models });
     } catch (err) {
       console.error("[Admin] 数据加载失败:", err);
     }
     setRefreshing(false);
-  }, []);
+  }, [session?.token]);
 
   useEffect(() => {
     load();
@@ -1136,6 +1066,16 @@ export default function Home() {
   const [credits, setCredits] = useState(DEFAULT_CREDITS);
   const [adOpen, setAdOpen] = useState(false);
 
+  // 管理后台入口鉴权（防攻击保障）：
+  // 仅当 ① NEXT_PUBLIC_ADMIN_USER_ID 匹配当前登录邮箱 或 ② 登录 Session 为 admin 角色 时，
+  // 普通用户（即使是 Pro）在 DOM 中完全看不到“管理后台”按钮。
+  const ADMIN_USER_ID = process.env.NEXT_PUBLIC_ADMIN_USER_ID || "";
+  const isAdminRole = (role?: string) => role === "admin" || role === "superadmin";
+  const isAdminIdentity =
+    mounted &&
+    ((ADMIN_USER_ID && localStorage.getItem("user_email") === ADMIN_USER_ID) ||
+      isAdminRole(adminSession?.role));
+
   const addLog = useCallback((msg: string) => {
     const ts = `[${new Date().toLocaleTimeString("zh-CN", { hour12: false })}] ${msg}`;
     setLogs(prev => [...prev.slice(-99), ts]);
@@ -1231,14 +1171,15 @@ export default function Home() {
       .catch(() => {});
   }, []);
 
-  // 支付完成充值奖励：购买 $1.00 方案直接获得 10 积分（Pro 无限积分叠加入账）
-  const handlePaymentSuccess = useCallback(() => {
-    const next = addCredits(PAYMENT_CREDIT_BONUS);
+  // 支付完成：按积分包一次性入账（Credits Top-up，无订阅）
+  const handlePaymentSuccess = useCallback((creditsAdded: number) => {
+    const delta = Number.isFinite(creditsAdded) && creditsAdded > 0 ? Math.floor(creditsAdded) : 0;
+    const next = addCredits(delta);
     setCredits(next);
     fetch("/api/v1/user/credits", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: getUserId(), delta: PAYMENT_CREDIT_BONUS, action: "purchase" }),
+      body: JSON.stringify({ user_id: getUserId(), delta, action: "purchase" }),
     })
       .then((r) => r.json())
       .then((d) => {
@@ -1248,7 +1189,7 @@ export default function Home() {
         }
       })
       .catch(() => {});
-    addLog(`[BILLING] 充值奖励: +${PAYMENT_CREDIT_BONUS} 积分（余额 ${next}）`);
+    addLog(`[BILLING] 积分到账: +${delta}（余额 ${next}）`);
   }, [addLog]);
 
   // 管理员登录态：pending 仅表示打开登录页；完整 session 才进入后台
@@ -1261,7 +1202,13 @@ export default function Home() {
       {/* Header */}
       <header className="header">
         <div className="header-left">
-          <span className="logo" onDoubleClick={() => setAdminSession({ pending: true })} style={{ cursor: "pointer" }}>CalorieAI</span>
+          <span
+            className="logo"
+            onDoubleClick={isAdminIdentity ? () => setAdminSession({ pending: true }) : undefined}
+            style={{ cursor: isAdminIdentity ? "pointer" : "default" }}
+          >
+            CalorieAI
+          </span>
           <span className="goal-badge">{t("goal_maintain_short")}</span>
         </div>
         <div className="header-right">
@@ -1318,7 +1265,9 @@ export default function Home() {
       <footer className="footer">
         <div className="version-bar">
           <span>Version: {APP_VERSION}</span>
-          <button className="admin-entry" onClick={() => setAdminSession({ pending: true })}>{t("admin_entry")}</button>
+          {isAdminIdentity && (
+            <button className="admin-entry" onClick={() => setAdminSession({ pending: true })}>{t("admin_entry")}</button>
+          )}
         </div>
       </footer>
 

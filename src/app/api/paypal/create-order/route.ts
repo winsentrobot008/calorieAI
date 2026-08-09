@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getCreditPack, resolvePack, type CreditPack } from "@/lib/credit-packs";
 
 const PAYPAL_CLIENT_ID = process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID;
 const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET;
@@ -34,14 +35,17 @@ async function getAccessToken(): Promise<string> {
 /**
  * POST /api/paypal/create-order
  *
- * Creates a PayPal order and returns the order ID for the frontend.
+ * 按 Credits Top-up 积分包创建一次性 PayPal 订单。
  *
- * Body: { plan: "monthly" | "yearly" | "permanent" }
+ * Body: { pack_id: "pack_starter" | "pack_booster" | "pack_power" }
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { plan } = body;
+    const pack: CreditPack | undefined = body.pack_id ? getCreditPack(body.pack_id) : resolvePack(body.plan);
+    if (!pack) {
+      return NextResponse.json({ error: `未知积分包: ${body.pack_id}` }, { status: 400 });
+    }
 
     // ── Demo / Mock mode ──────────────────────────────
     if (
@@ -53,21 +57,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         id: `ORDER_MOCK_${Date.now()}`,
         mock: true,
+        pack_id: pack.id,
+        credits: pack.credits,
+        amount: pack.priceUsd,
         message: "演示模式：未配置完整的 PayPal 密钥。设置 PAYPAL_CLIENT_ID 和 PAYPAL_CLIENT_SECRET 启用真实支付。",
       });
-    }
-
-    // ── Price map ─────────────────────────────────────
-    const priceMap: Record<string, { amount: string; description: string }> = {
-      // 统一测试价 $1.00（真机/沙箱验证用）
-      monthly:   { amount: "1.00", description: "CalorieAI Pro 月付订阅 ($1 测试价)" },
-      yearly:    { amount: "1.00", description: "CalorieAI Pro 年付订阅 ($1 测试价)" },
-      permanent: { amount: "1.00", description: "CalorieAI 永久授权 ($1 测试价)" },
-    };
-
-    const config = priceMap[plan];
-    if (!config) {
-      return NextResponse.json({ error: `未知方案: ${plan}` }, { status: 400 });
     }
 
     // ── Get access token ──────────────────────────────
@@ -84,25 +78,25 @@ export async function POST(request: NextRequest) {
         intent: "CAPTURE",
         purchase_units: [
           {
-            reference_id: plan,
-            description: config.description,
+            reference_id: pack.id,
+            description: `CalorieAI ${pack.credits} 积分包（一次性付款，无订阅）`,
             amount: {
               currency_code: "USD",
-              value: config.amount,
+              value: pack.priceUsd.toFixed(2),
               breakdown: {
                 item_total: {
                   currency_code: "USD",
-                  value: config.amount,
+                  value: pack.priceUsd.toFixed(2),
                 },
               },
             },
             items: [
               {
-                name: `CalorieAI ${plan === "monthly" ? "月付" : plan === "yearly" ? "年付" : "永久授权"}`,
-                description: config.description,
+                name: `CalorieAI ${pack.credits} 积分包`,
+                description: `一次性付款 · 按次付费 · ${pack.credits} 积分即时到账`,
                 unit_amount: {
                   currency_code: "USD",
-                  value: config.amount,
+                  value: pack.priceUsd.toFixed(2),
                 },
                 quantity: "1",
                 category: "DIGITAL_GOODS",
@@ -124,7 +118,7 @@ export async function POST(request: NextRequest) {
     }
 
     const order = await orderRes.json();
-    return NextResponse.json({ id: order.id });
+    return NextResponse.json({ id: order.id, pack_id: pack.id, credits: pack.credits, amount: pack.priceUsd });
   } catch (error: any) {
     console.error("[PayPal Create Order Error]", error);
     return NextResponse.json(

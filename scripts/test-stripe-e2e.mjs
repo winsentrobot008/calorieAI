@@ -1,24 +1,13 @@
 #!/usr/bin/env node
 
 /**
- * ─── Stripe 支付全链路端到端测试 (E2E) ──────────────────────────────
+ * ⚠️ 遗留脚本（订阅模式，已弃用）
  *
- * 模拟 Stripe Webhook 事件，验证整个支付回调流程：
+ * 商业化已切换为 Credits Top-up（积分充值/按次付费）一次性付款：
+ *   - 订阅激活 / 续费 / 停用逻辑已从 Webhook 移除；
+ *   - 当前回归请使用 `npm run qa:ui` / `npm run test` / `npm run test:api`。
  *
- * 测试场景:
- *   1. checkout.session.completed (月付)  → 订阅激活 ✅
- *   2. checkout.session.completed (年付)  → 订阅激活 ✅
- *   3. checkout.session.completed (永久)  → 永久买断 ✅
- *   4. invoice.payment_succeeded          → 续费延长 ✅
- *   5. customer.subscription.deleted      → 停用订阅 ✅
- *   6. 未付费用户状态查询                  → free_tier: true ✅
- *
- * 用法:
- *   node scripts/test-stripe-e2e.mjs
- *
- * 环境要求:
- *   - 项目已 npm install
- *   - billing-store 模块可用
+ * 本脚本仅保留作为旧订阅模式的历史 E2E 参考，不再作为交付门禁。
  */
 
 import fs from "fs";

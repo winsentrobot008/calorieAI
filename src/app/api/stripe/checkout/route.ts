@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getCreditPack, resolvePack, type CreditPack } from "@/lib/credit-packs";
 
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
@@ -10,14 +11,16 @@ const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
  *
  * 请求体:
  * {
- *   plan: "monthly" | "yearly" | "permanent",
+ *   pack_id: "pack_starter" | "pack_booster" | "pack_power",  // 积分包（旧 plan 参数自动回退体验包）
  *   payment_method?: "card" | "alipay" | "wechat_pay" | "all",  // 默认 "all"
- *   user_id?: string,       // 用户 ID (关联订阅)
- *   email?: string,         // 用户邮箱 (关联订阅)
+ *   user_id?: string,       // 用户 ID（积分入账）
+ *   email?: string,         // 用户邮箱
  *   success_url?: string,
  *   cancel_url?: string
  * }
- * 响应: { sessionId: string, url: string }
+ * 响应: { sessionId: string, url: string, pack_id, credits, amount, fallback? }
+ *
+ * 商业化模式：Credits Top-up（积分充值/按次付费）一次性付款，取消订阅。
  *
  * 真实模式要求 STRIPE_SECRET_KEY 与 NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY 同时有效；
  * 任一缺失/占位时返回 mock 降级，前端可据此展示演示成功。
@@ -32,11 +35,19 @@ export async function POST(request: NextRequest) {
       STRIPE_PUBLISHABLE_KEY !== "YOUR_STRIPE_PUBLISHABLE_KEY_HERE";
     if (!secretValid || !publishableValid) {
       const body = await request.json().catch(() => ({}));
-      const { plan = "monthly" } = body;
+      const pack: CreditPack | undefined = body.pack_id
+        ? getCreditPack(body.pack_id)
+        : resolvePack(body.plan);
+      if (!pack) {
+        return NextResponse.json({ error: `未知积分包: ${body.pack_id}` }, { status: 400 });
+      }
       return NextResponse.json({
         sessionId: `cs_mock_${Date.now()}`,
-        url: `/billing/success?plan=${plan}&mock=true`,
+        url: `/billing/success?pack_id=${pack.id}&mock=true`,
         mock: true,
+        pack_id: pack.id,
+        credits: pack.credits,
+        amount: pack.priceUsd,
         message:
           "演示模式：未配置完整的 Stripe 密钥（STRIPE_SECRET_KEY / NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY）。设置后启用真实支付。",
       });
@@ -48,35 +59,15 @@ export async function POST(request: NextRequest) {
     });
 
     const body = await request.json();
-    const { plan, payment_method = "all", success_url, cancel_url, user_id, email } = body;
+    const { pack_id, payment_method = "all", success_url, cancel_url, user_id, email } = body;
+    const pack: CreditPack | undefined = pack_id ? getCreditPack(pack_id) : resolvePack(body.plan);
+    if (!pack) {
+      return NextResponse.json({ error: `未知积分包: ${pack_id}` }, { status: 400 });
+    }
 
     const origin = request.headers.get("origin") || "http://localhost:3000";
-
-    const priceMap: Record<string, { price: number; label: string; description: string; metadata: Record<string, string> }> = {
-      monthly: {
-        price: 100,
-        label: "月付 Pro",
-        description: "CalorieAI Pro 月付订阅 ($1 测试价) — 无限次 AI 食物识别",
-        metadata: { plan_type: "subscription", interval: "month", plan: "monthly" },
-      },
-      yearly: {
-        price: 100,
-        label: "年付 Pro",
-        description: "CalorieAI Pro 年付订阅 ($1 测试价) — 无限次 AI 食物识别",
-        metadata: { plan_type: "subscription", interval: "year", plan: "yearly" },
-      },
-      permanent: {
-        price: 100,
-        label: "永久买断",
-        description: "CalorieAI 永久授权 ($1 测试价) — 终身 Pro 功能",
-        metadata: { plan_type: "license", interval: "lifetime", plan: "permanent" },
-      },
-    };
-
-    const config = priceMap[plan];
-    if (!config) {
-      return NextResponse.json({ error: `未知方案: ${plan}` }, { status: 400 });
-    }
+    const amountCents = Math.round(pack.priceUsd * 100);
+    const productLabel = `${pack.credits} 积分包`;
 
     // ── 确定支持的支付方式 ──────────────────────────────
     // 支持: 国际信用卡 + 支付宝 + 微信支付
@@ -94,51 +85,42 @@ export async function POST(request: NextRequest) {
     // ── 构建 Checkout Session ──────────────────────────
     const sessionParams: any = {
       payment_method_types: paymentMethodTypes,
+      mode: "payment",
       line_items: [
         {
           price_data: {
             currency: "usd",
             product_data: {
-              name: `CalorieAI ${config.label}`,
-              description: config.description,
+              name: `CalorieAI ${productLabel}`,
+              description: `一次性付款 · 按次付费 · ${pack.credits} 积分即时到账（无订阅）`,
             },
-            unit_amount: config.price,
-            ...(plan === "monthly" || plan === "yearly"
-              ? { recurring: { interval: plan === "monthly" ? "month" as const : "year" as const } }
-              : {}),
+            unit_amount: amountCents,
           },
           quantity: 1,
         },
       ],
-      mode: plan === "permanent" ? "payment" : "subscription",
-      success_url: success_url || `${origin}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
+      success_url:
+        success_url ||
+        `${origin}/billing/success?pack_id=${pack.id}&credits=${pack.credits}&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: cancel_url || `${origin}/billing/cancel`,
       metadata: {
-        ...config.metadata,
+        pack_id: pack.id,
+        credits: String(pack.credits),
+        amount_usd: String(pack.priceUsd),
         ...(user_id ? { user_id } : {}),
         ...(email ? { email } : {}),
       },
       ...(email ? { customer_email: email } : {}),
+      payment_intent_data: {
+        metadata: {
+          pack_id: pack.id,
+          credits: String(pack.credits),
+          amount_usd: String(pack.priceUsd),
+          ...(user_id ? { user_id } : {}),
+          ...(email ? { email } : {}),
+        },
+      },
     };
-
-    // ── 支付宝/微信支付使用 payment_intent_data 设置描述 ──
-    if (plan === "permanent") {
-      sessionParams.payment_intent_data = {
-        metadata: {
-          ...config.metadata,
-          ...(user_id ? { user_id } : {}),
-          ...(email ? { email } : {}),
-        },
-      };
-    } else {
-      sessionParams.subscription_data = {
-        metadata: {
-          ...config.metadata,
-          ...(user_id ? { user_id } : {}),
-          ...(email ? { email } : {}),
-        },
-      };
-    }
 
     // ── 支付方式降级重试 ──────────────────────────────
     // 支付宝/微信支付未在 Stripe 账户激活，或 wechat_pay 不支持订阅模式时，
@@ -164,6 +146,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       sessionId: session.id,
       url: session.url,
+      pack_id: pack.id,
+      credits: pack.credits,
+      amount: pack.priceUsd,
       payment_methods: fallback ? FALLBACK_CARD_ONLY : paymentMethodTypes,
       fallback,
     });

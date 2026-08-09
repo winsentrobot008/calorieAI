@@ -17,9 +17,9 @@
 - 框架: Next.js 16 (App Router) + React 19 + TypeScript + Turbopack
 - 样式与 UI: Tailwind CSS v4 + Lucide Icons
 - 状态与 i18n: 自定义 `LocaleInit` + `hydrated` 状态延迟加载（防 React #418）；`localStorage > navigator.language > en`
-- 支付: Stripe (信用卡/Apple Pay/Link/支付宝/微信) + PayPal (微额支付兜底)
+- 支付: Stripe (信用卡/Apple Pay/Link/支付宝/微信) + PayPal (微额支付兜底)；**Credits Top-up 积分包一次性付款，无订阅**
 - AI: A→B→C 回退链（Gemini Vision → OpenRouter → DeepSeek），不返回 Mock
-- 积分: 服务端权威（识图 -1 / 广告 +10 / 充值/Pro），`src/lib/db` DAL 记账
+- 积分: 服务端权威（识图 -1 / 广告 +10 / 积分包充值），`src/lib/db` DAL 记账
 - 持久化 (DAL): Postgres → Vercel KV/Redis → 本地文件（os.tmpdir）三机制自动降级
 - TTS: Edge-TTS (Azure Cognitive Services)
 - 部署: Vercel (Git 自动部署) + Cloudflare Wildcard DNS（`*.app008ai.com`）
@@ -36,7 +36,7 @@
 
 ## 规范
 - **i18n**（`src/lib/i18n`，零依赖）: 优先级 `localStorage > navigator.language > en`；文案必须走 `t("key")`，抽离到 `zh.json`/`en.json`，禁止硬编码中文。
-- **支付**: Stripe Checkout Session + Webhook → `billing-store` → `data/subscriptions.json`；PayPal 走 capture → `subscribe` API；未配密钥时自动降级为 mock 模拟支付。
+- **支付**: Stripe Checkout Session（一次性付款）+ Webhook `checkout.session.completed` → 按积分包发放积分并记账；PayPal capture 同理；未配密钥时自动降级为 mock 模拟支付。
 - **环境变量**: 见 `.env.example`；`.env.local`、`*.backup` 不入库。
 - **命令**: `npm run dev` / `build` / `lint` / `test:routes`。
 - **构建产物不索引**: `node_modules`、`.next`、`dist`、`coverage` 等见 `.ignore` / `.gitignore`。

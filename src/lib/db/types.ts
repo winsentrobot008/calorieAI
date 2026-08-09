@@ -5,7 +5,7 @@ import type { VisitRecord } from "@/lib/analytics-store";
 export interface RecordPaymentInput {
   orderId: string;
   provider: "stripe" | "paypal";
-  plan: "monthly" | "yearly" | "permanent";
+  plan: string; // Credits Top-up 积分包 id（旧订阅方案名保留兼容）
   amount: number;
   currency?: string;
   email?: string;

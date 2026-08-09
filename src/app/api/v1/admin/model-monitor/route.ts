@@ -1,7 +1,11 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { getAdminAuth } from "@/lib/admin-auth";
 import { getVisionStats } from "@/lib/db";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const auth = getAdminAuth(request);
+  if (!auth.ok) return auth.response;
+
   const stats = await getVisionStats();
   return NextResponse.json({
     total_calls: stats.total_calls,
