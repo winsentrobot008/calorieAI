@@ -39,7 +39,7 @@
 
 ### 1.1 适用场景
 
-- 需要快速产出**同构 AI SaaS 矩阵**（拍照识别 / 内容分析 / 订阅变现）的产品线；
+- 需要快速产出**同构 AI SaaS 矩阵**（拍照识别 / 内容分析 / 积分充值变现）的产品线；
 - 新应用（如 PetAI、PlantAI）只需**换 Prompt、换品牌、换 UI 文案**，支付、积分、DAL、Admin、质检全部复用；
 - 同一套代码保持“**零 Key 安全 + 服务端权威 + 可移植部署**”三项硬规范。
 
@@ -79,6 +79,17 @@ rg -o "process\.env\.[A-Z_]+" src | sort -u
 
 ---
 
+### 2.2 1-Step App Clone 标准 SOP（10 秒挂载全套积分与收银台）
+
+克隆后只需网关注册 + 两项环境变量，即获得全套跨端积分与统一收银台（**One-Time Checkout，无订阅**）：
+
+1. **网关注册**：在 `GATEWAY_APP_TOKENS` 追加一行 `"petai":"tok_petai_xxx"`（约 10 秒）；
+2. **客户端配置**：`.env.local` 写入 `GATEWAY_BASE_URL` + `GATEWAY_APP_TOKEN` 两项；
+3. **自动挂载**：`gateway-client.ts` SDK 即接管跨端积分（`credits`）、统一收银（`billing/checkout`）与统一识图（`ai/vision`）；
+4. **集中改价**：后续积分包/价格调整只在网关改一处，50+ 套娃应用秒级同步，无需逐仓发版。
+
+---
+
 ## 🏷️ 3. 参考实现：CalorieAI 产品与商业定位
 
 | 项 | 值 |
@@ -86,9 +97,9 @@ rg -o "process\.env\.[A-Z_]+" src | sort -u
 | **产品** | CalorieAI — AI 驱动的卡路里识别与膳食管理 SaaS（本模版的参考实现） |
 | **核心能力** | AI 拍照识图（多模态视觉）→ 食物热量/蛋白/脂肪/碳水估算 → 膳食记录与趋势分析 |
 | **生产地址** | `https://calorie-ai-seven.vercel.app` |
-| **商业模型** | Freemium SaaS：免费用户每日 3 次识图 + 广告激励积分；**Credits Top-up 积分充值（一次性付款/按次付费，无订阅）** |
+| **商业模型** | 三支柱变现（均一次性/非自动续费）：**💰 Credits Top-up 积分充值（按次付费）+ 🎬 看广告领积分（Free Tier）+ 🃏 终身买断卡（Lifetime Access）**；彻底弃用按月/按年订阅（Subscription Traps） |
 | **变现渠道** | Stripe（信用卡/Apple Pay/Link/支付宝/微信支付）+ PayPal（微额支付兜底）双通道 |
-| **授权体系** | 服务端权威积分 + Pro 权限，前端仅消费服务端 API 判定结果 |
+| **授权体系** | 服务端权威积分（+ 终身买断卡一次性授权），前端仅消费服务端 API 判定结果 |
 
 ### 核心用户旅程
 
@@ -97,7 +108,7 @@ rg -o "process\.env\.[A-Z_]+" src | sort -u
    ↓
 A→B→C 视觉回退链识别 (Gemini → OpenRouter → DeepSeek)
    ↓
-服务端鉴权: Pro? → 免费额度? → 积分余额?   （服务端权威）
+服务端鉴权: 免费额度? → 积分余额?   （服务端权威 · 1 积分/次）
    ↓
 返回结构化食物记录 (food/grams/kcal/protein/fat/carbs)
    ↓
@@ -133,7 +144,7 @@ Stripe Checkout 真实收款，支持：
 
 ### 4.3 服务端权威积分系统
 
-积分交易与 **Pro 权限完全由服务端 API 掌控**，前端仅展示服务端返回结果，杜绝客户端篡改：
+积分交易完全由 **服务端 API 权威记账**，前端仅展示服务端返回结果，杜绝客户端篡改：
 
 | 交易 | 规则 | 服务端入口 |
 |------|------|-----------|
@@ -147,7 +158,7 @@ Stripe Checkout 真实收款，支持：
 - `initCreditsIfMissing(userId, fallback=3)`：新用户初始化赠送 3 积分
 - `addServerCredits(userId, delta)`：服务端增减积分（结果不低于 0），返回新余额
 
-> 免费用户每日 3 次识图（`daily_free_uses: 3`），Pro 用户不受限；权限判定见 [`GET /api/v1/billing/status`](src/app/api/v1/billing/status/route.ts)。
+> 免费用户每日 3 次识图（`daily_free_uses: 3`）；积分余额充足即可连续识图（**1 积分/次**），可购买积分包或看广告获取积分；终身买断卡用户不受限。权限判定见 [`GET /api/v1/billing/status`](src/app/api/v1/billing/status/route.ts)。
 
 ---
 
@@ -162,7 +173,7 @@ Stripe Checkout 真实收款，支持：
 | 领域 | 方法 |
 |------|------|
 | **用户积分** | `getCredits` / `setCredits` |
-| **Pro 订阅** | `getSubscription*` / `upsertSubscription` / `deactivateSubscription` / `getAllSubscriptions` |
+| **授权记录** | `getSubscription*` / `upsertSubscription` / `deactivateSubscription` / `getAllSubscriptions`（终身买断卡 / 旧订阅兼容） |
 | **支付流水** | `recordPayment` / `getPayments` |
 | **识图日志** | `recordVisionLog` / `getVisionLogs` / `getAllVisionLogs` |
 | **访问统计** | `recordVisit` / `getVisits` |
@@ -191,7 +202,7 @@ Stripe Checkout 真实收款，支持：
 ### 5.4 0-Token 运维机制
 
 - 运维/监控数据（访问统计、识图日志、支付流水、模型调用延迟）**全部由自建 DAL 持久化**，不依赖付费第三方可观测服务，实现 **0 Token 成本运维**。
-- 管理后台通过 [`/api/v1/admin/*`](src/app/api/v1/admin/overview/route.ts) 聚合输出：收入统计、识图健康度、访问量、活跃订阅数。
+- 管理后台通过 [`/api/v1/admin/*`](src/app/api/v1/admin/overview/route.ts) 聚合输出：收入统计、识图健康度、访问量、授权/流水统计（`x-admin-token` 鉴权）。
 
 ---
 
@@ -225,7 +236,7 @@ src/
 │   │       ├── meals/analyze-image      # A→B→C 视觉识别（服务端鉴权）
 │   │       ├── meals/analyze-text       # 文字识餐
 │   │       ├── user/credits             # 积分查询/增减（服务端权威）
-│   │       ├── billing/{status,subscribe,license,ad-reward}  # 订阅+广告激励
+│   │       ├── billing/{status,subscribe,license,ad-reward}  # 积分/授权+广告激励（subscribe/license 已停用 410）
 │   │       ├── admin/{overview,revenue,users,logs,model-monitor}  # 0-Token 运维后台
 │   │       ├── stats/ + insight/        # 趋势分析与建议
 │   │       └── tts/                     # Edge-TTS 语音合成
@@ -235,7 +246,7 @@ src/
 └── lib/
     ├── db/                              # ⭐ DAL 抽象层（index/types + adapters/{file,kv,postgres}）
     ├── gateway-client.ts                # ⭐ Central Gateway SDK（vision/checkout/credits）
-    ├── billing-store.ts                 # 订阅状态持久化
+    ├── billing-store.ts                 # 支付流水/授权（终身买断卡、旧订阅兼容）持久化
     ├── credits-store.ts                 # 积分本地文件回退实现
     ├── analytics-store.ts               # 访问统计
     ├── vision-log-store.ts              # 识图日志
