@@ -39,7 +39,6 @@
   "toggle_theme": "切换主题",
   "goal_maintain_short": "维持体重",
   "daily_target_label": "目标 {calories} kcal",
-  "nav_tts": "TTS 测试",
   "log_label": "📋 日志",
 
   "meal_type_breakfast": "早餐",
@@ -164,9 +163,6 @@
   "paypal_payment_success": "支付成功! 感谢订阅！",
   "paypal_error": "PayPal 支付失败",
 
-  "tts_title": "🔊 Edge-TTS 语音测试",
-  "tts_placeholder": "输入要朗读的文本...",
-  "tts_speak": "🔊 朗读",
 
   "admin_title": "🔐 管理后台",
   "admin_default_hint": "特权账号: winsentrobot@gmail.com / 0833",

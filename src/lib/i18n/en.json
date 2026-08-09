@@ -39,7 +39,6 @@
   "toggle_theme": "Toggle theme",
   "goal_maintain_short": "Maintain weight",
   "daily_target_label": "Target {calories} kcal",
-  "nav_tts": "TTS Test",
   "log_label": "📋 Logs",
 
   "meal_type_breakfast": "Breakfast",
@@ -164,9 +163,6 @@
   "paypal_payment_success": "Payment successful! Thank you for subscribing!",
   "paypal_error": "PayPal payment failed",
 
-  "tts_title": "🔊 Edge-TTS Test",
-  "tts_placeholder": "Enter text to read aloud...",
-  "tts_speak": "🔊 Speak",
 
   "admin_title": "🔐 Admin",
   "admin_default_hint": "Privileged: winsentrobot@gmail.com / 0833",

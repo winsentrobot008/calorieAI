@@ -934,27 +934,6 @@ function BillingModal({
   );
 }
 
-// ─── TTS Panel ─────────────────────────────────────────────────────────
-function TTSPanel({ addLog }: { addLog: (msg: string) => void }) {
-  const [text, setText] = useState("你好，欢迎使用 CalorieAI 智能卡路里助手！");
-  const [playing, setPlaying] = useState(false);
-  const handleSpeak = async () => {
-    if (!text.trim()) return; setPlaying(true); addLog("[TTS] 正在合成语音...");
-    try {
-      const res = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: text.trim(), voice: "zh-CN-XiaoxiaoNeural" }) });
-      if (!res.ok) throw new Error("TTS 请求失败");
-      const blob = await res.blob(); const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audio.onended = () => { setPlaying(false); addLog("[TTS] 播放完成"); };
-      addLog("[TTS] 正在播放..."); await audio.play();
-    } catch { addLog("[TTS Error] 语音合成失败"); setPlaying(false); }
-  };
-  return (<div className="card"><div className="card-title">{t("tts_title")}</div>
-    <textarea className="text-input" rows={2} value={text} onChange={e => setText(e.target.value)} placeholder={t("tts_placeholder")} />
-    <div style={{ marginTop: 10 }}><button className="submit-btn" disabled={!text.trim() || playing} onClick={handleSpeak} style={{ height: 38, fontSize: 12 }}>{playing ? <span className="spinner" /> : t("tts_speak")}</button></div>
-  </div>);
-}
-
 // ─── Admin Login ───────────────────────────────────────────────────────
 function AdminLoginPage({ onLogin }: { onLogin: (s: any) => void }) {
   const [username, setUsername] = useState(""); const [password, setPassword] = useState("");
@@ -1301,7 +1280,6 @@ export default function Home() {
         <button className={`tab ${tab === "record" ? "active" : ""}`} onClick={() => setTab("record")}>{t("record_diet")}</button>
         <button className={`tab ${tab === "dashboard" ? "active" : ""}`} onClick={() => setTab("dashboard")}>{t("daily_stats")}</button>
         <button className={`tab ${tab === "profile" ? "active" : ""}`} onClick={() => setTab("profile")}>{t("profile")}</button>
-        <button className={`tab ${tab === "tts" ? "active" : ""}`} onClick={() => setTab("tts")}>{t("nav_tts")}</button>
       </nav>
 
       {/* Content */}
@@ -1318,7 +1296,6 @@ export default function Home() {
         )}
         {tab === "dashboard" && <DailyDashboard />}
         {tab === "profile" && <Profile addLog={addLog} />}
-        {tab === "tts" && <TTSPanel addLog={addLog} />}
       </main>
 
       {/* 积分栏：看广告领积分（日志栏上方） */}
