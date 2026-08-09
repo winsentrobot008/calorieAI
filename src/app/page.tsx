@@ -657,6 +657,11 @@ function BillingModal({
         return;
       }
 
+      if (data.fallback) {
+        setMessage(`⚠️ ${t("stripe_fallback_msg")}`);
+        addLog(`[Stripe] ${paymentMethod} 未开通，已自动降级为信用卡支付`);
+      }
+
       addLog(`[Stripe] 已进入 Stripe 真实收银台，正在跳转支付页面...`);
       window.location.href = data.url;
     } catch (error: any) {

@@ -41,7 +41,7 @@
 src/
 ├── app/
 │   ├── layout.tsx            # Root Layout: ThemeProvider + LocaleInit + <html suppressHydrationWarning>
-│   ├── page.tsx              # 主页面 (记录/看板/设置/TTS + 登录/Billing 弹窗 + Admin)
+│   ├── page.tsx              # 主页面 (记录/看板/设置 + 登录/Billing 弹窗 + Admin)
 │   ├── billing/              # /billing/success + /billing/cancel 支付结果页
 │   └── api/                  # stripe / paypal / v1/{meals,stats,insight,ads,user,billing,admin}
 ├── components/

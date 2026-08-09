@@ -154,6 +154,7 @@
   "stripe_checkout_creating": "正在创建支付会话...",
   "stripe_checkout_redirect": "正在跳转到支付页面...",
   "stripe_error_create": "创建支付会话失败",
+  "stripe_fallback_msg": "该支付方式未开通，已自动改用信用卡支付",
   "billing_error_payment_failed": "支付失败",
   "billing_error_select_plan_first": "请先选择方案",
   "paypal_error_create": "创建 PayPal 订单失败",

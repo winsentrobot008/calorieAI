@@ -154,6 +154,7 @@
   "stripe_checkout_creating": "Creating checkout session...",
   "stripe_checkout_redirect": "Redirecting to payment page...",
   "stripe_error_create": "Failed to create checkout session",
+  "stripe_fallback_msg": "This payment method is not activated — switched to card automatically",
   "billing_error_payment_failed": "Payment failed",
   "billing_error_select_plan_first": "Please select a plan first",
   "paypal_error_create": "Failed to create PayPal order",

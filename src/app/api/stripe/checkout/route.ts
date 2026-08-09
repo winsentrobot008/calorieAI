@@ -140,12 +140,32 @@ export async function POST(request: NextRequest) {
       };
     }
 
-    const session = await stripe.checkout.sessions.create(sessionParams);
+    // ── 支付方式降级重试 ──────────────────────────────
+    // 支付宝/微信支付未在 Stripe 账户激活，或 wechat_pay 不支持订阅模式时，
+    // 自动降级为信用卡支付，避免前端拿到 500 原始英文报错。
+    const FALLBACK_CARD_ONLY: string[] = ["card"];
+    const tryCreate = async (methods: string[]): Promise<{ session: any; fallback: boolean }> => {
+      try {
+        const s = await stripe.checkout.sessions.create({ ...sessionParams, payment_method_types: methods });
+        return { session: s, fallback: false };
+      } catch (err: any) {
+        const msg = err?.message || String(err);
+        const unsupported = /invalid|not activated|cannot be used|not supported|does not support|no such payment method|requires\s*`?payment_method_options/i.test(msg);
+        if (unsupported && !(methods.length === 1 && methods[0] === "card")) {
+          const s = await stripe.checkout.sessions.create({ ...sessionParams, payment_method_types: FALLBACK_CARD_ONLY });
+          return { session: s, fallback: true };
+        }
+        throw err;
+      }
+    };
+
+    const { session, fallback } = await tryCreate(paymentMethodTypes);
 
     return NextResponse.json({
       sessionId: session.id,
       url: session.url,
-      payment_methods: paymentMethodTypes,
+      payment_methods: fallback ? FALLBACK_CARD_ONLY : paymentMethodTypes,
+      fallback,
     });
   } catch (error: any) {
     console.error("[Stripe Checkout Error]", error);
