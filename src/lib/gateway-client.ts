@@ -49,9 +49,22 @@ export interface GatewayCreditsResponse {
   updated_at?: string;
 }
 
+export interface GatewayTextResponse {
+  app_id: string;
+  count: number;
+  records: any[];
+  items: any[];
+  totalKcal: number;
+  totalProtein: number;
+  totalFat: number;
+  totalCarbs: number;
+  model: GatewayModelInfo;
+}
+
 export interface GatewayClient {
   isConfigured: () => boolean;
   vision: (formData: FormData) => Promise<GatewayVisionResponse>;
+  text: (body: { text: string; meal_type?: string }) => Promise<GatewayTextResponse>;
   checkout: (body: {
     plan: string;
     provider: "stripe" | "paypal";
@@ -97,6 +110,15 @@ export function createGatewayClient(config: GatewayClientConfig): GatewayClient 
         method: "POST",
         headers: authHeaders(false),
         body: formData,
+      });
+    },
+
+    /** 统一文字食物分析：网关按 app_id 切换 Prompt（未开通时由调用方回退直连） */
+    text(body: { text: string; meal_type?: string }): Promise<GatewayTextResponse> {
+      return request<GatewayTextResponse>(`${GATEWAY_API_PREFIX}/ai/text`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify(body),
       });
     },
 

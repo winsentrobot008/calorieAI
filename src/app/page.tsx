@@ -259,6 +259,7 @@ function MealRecorder({
   const [text, setText] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [result, setResult] = useState<typeof MOCK_FOODS | null>(null);
+  const [summary, setSummary] = useState<{ totalKcal: number; totalProtein: number; totalFat: number; totalCarbs: number } | null>(null);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -276,6 +277,7 @@ function MealRecorder({
     setSelectedFile(file);
     setPreviewUrl(blobUrl);
     setResult(null);       // 显式清空旧识别结果（避免残存上次的 Mock/白米饭数据）
+    setSummary(null);
     setExpandedIdx(null);  // 同时收起上次展开的食物明细
     addLog(`[Upload] 已选择图片: ${file.name} (${(file.size / 1024).toFixed(1)} KB) — 仅预览，未触发 AI 请求`);
   };
@@ -291,7 +293,7 @@ function MealRecorder({
       return;
     }
 
-    setAnalyzing(true); setResult(null);
+    setAnalyzing(true); setResult(null); setSummary(null);
     addLog(`[AI] 开始识图: ${selectedFile.name} (${(selectedFile.size / 1024).toFixed(1)} KB)`);
 
     try {
@@ -332,11 +334,48 @@ function MealRecorder({
 
   const handleTextSubmit = async () => {
     if (!text.trim()) return;
-    setAnalyzing(true); setResult(null);
+    setAnalyzing(true); setResult(null); setSummary(null);
     addLog(`[Text] 正在解析: "${text.slice(0, 50)}..."`);
-    await new Promise(r => setTimeout(r, 1000));
-    setResult(MOCK_FOODS);
-    addLog("[AI] 解析到 3 种食物");
+
+    try {
+      const res = await fetch(`${API}/v1/meals/analyze-text`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text.trim(), meal_type: mealType }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const records = data.records || data.items || [];
+        setResult(records);
+        if (typeof data.totalKcal === "number") {
+          setSummary({
+            totalKcal: data.totalKcal,
+            totalProtein: data.totalProtein ?? 0,
+            totalFat: data.totalFat ?? 0,
+            totalCarbs: data.totalCarbs ?? 0,
+          });
+        }
+        const modelLabel = data.model?.label || (data.model ? `${data.model.provider} (${data.model.model || "unknown"})` : "");
+        if (modelLabel) addLog(`[AI] 分析模型: ${modelLabel}`);
+        addLog(`[AI] 解析到 ${data.count ?? records.length} 种食物`);
+        records.forEach((rec: any) => {
+          addLog(`  ${rec.food} — ${rec.calories} kcal (P${rec.protein_g}/F${rec.fat_g}/C${rec.carbs_g})`);
+        });
+
+        // 分析成功后自动扣除 1 积分（Pro 用户无限次，免扣）
+        if (!isPro) {
+          onSpendCredit();
+          addLog("[Credits] 识别成功，扣除 1 积分");
+        }
+      } else {
+        let detail = await res.text();
+        try { detail = JSON.parse(detail).detail || detail; } catch { /* keep raw */ }
+        addLog(`[Error] ${detail.slice(0, 100)}`);
+      }
+    } catch (err: any) {
+      addLog(`[Error] ${err.message}`);
+    }
     setAnalyzing(false);
   };
 
@@ -372,6 +411,14 @@ function MealRecorder({
         </button>
       </div>)}
       {result && result.length > 0 && (<div className="card"><div className="card-title">{t("recognition_result")}</div>
+        {summary && (
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center", marginBottom: 10, fontSize: 13, fontWeight: 600 }}>
+            <span style={{ color: "#fbbf24" }}>🔥 {summary.totalKcal.toFixed(0)} kcal</span>
+            <span style={{ color: "#60a5fa" }}>P {summary.totalProtein.toFixed(0)}g</span>
+            <span style={{ color: "#34d399" }}>F {summary.totalFat.toFixed(0)}g</span>
+            <span style={{ color: "#f472b6" }}>C {summary.totalCarbs.toFixed(0)}g</span>
+          </div>
+        )}
         {result.map((rec, i) => (<div key={i}>
           <div className="food-item clickable" onClick={() => setExpandedIdx(expandedIdx === i ? null : i)}>
             <div style={{ flex: 1 }}>
