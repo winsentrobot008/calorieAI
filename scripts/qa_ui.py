@@ -7,7 +7,9 @@ qa_ui.py — CalorieAI 交付前 UI 质检（npm run qa:ui）
   2. 主页 Tab 数量 = 3（记录饮食 / 数据看板 / 个人设置）；
   3. 非管理员（普通用户 / Pro 用户）DOM 中不存在 .admin-entry 按钮；
   4. 购买弹窗为 Credits Top-up 积分包（无订阅 Tab、无月付/年付）；
-  5. 多语言 zh/en × 明暗主题切换：0 console 报错、无横向溢出。
+  5. 多语言 zh/en × 明暗主题切换：0 console 报错、无横向溢出；
+  6. 语义级 API 校验：随机输入调用 analyze-text，断言 200 + 模型标记 + 动态变更 + 反 Mock
+     （禁止仅断言 200；命中固定 Mock 白米饭/鸡胸肉/西兰花直接 FAIL）。
 
 若目标端口未启动，自动以生产构建（next start）拉起，测试后关闭。
 用法：
@@ -62,6 +64,7 @@ def main():
     parser.add_argument("--url", default=f"http://127.0.0.1:{PORT}")
     parser.add_argument("--headed", action="store_true")
     parser.add_argument("--no-start", action="store_true", help="不自动启动服务器")
+    parser.add_argument("--no-semantic", action="store_true", help="跳过语义级 API 校验（不推荐）")
     args = parser.parse_args()
 
     from playwright.sync_api import sync_playwright
@@ -165,6 +168,56 @@ def main():
                 if layout["sw"] > layout["cw"] + 2:
                     result["layout_issues"].append(f"locale={locale} light overflow {layout}")
                 log_check(f"locale={locale} light 无报错/无溢出", not result["console_errors"] and layout["sw"] <= layout["cw"] + 2, str(layout))
+
+            # 6) 语义级 API 校验：随机输入 + 模型标记 + 动态变更 + 反 Mock
+            if not args.no_semantic:
+                import random as _random
+
+                def _sig(records):
+                    return "~".join(
+                        f"{r.get('food', '')}|{r.get('grams', 0)}|{r.get('calories', 0)}" for r in (records or [])
+                    )
+
+                legacy_sig = "~".join(["白米饭|200|260", "鸡胸肉|150|247", "西兰花|100|34"])
+                browser_ua = (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+                )
+                texts = [
+                    f"吃了{_random.randint(120, 220)}g米饭和{_random.randint(60, 140)}g西兰花（QA语义随机 {int(time.time())}）",
+                    f"早餐{_random.choice(['一杯牛奶', '两个鸡蛋', '一碗燕麦'])}（QA语义随机 {int(time.time())}）",
+                ]
+                sigs = []
+                for i, txt in enumerate(texts, 1):
+                    try:
+                        resp = page.request.post(
+                            f"{args.url}/api/v1/meals/analyze-text",
+                            data=json.dumps({"text": txt, "meal_type": "lunch"}),
+                            headers={"Content-Type": "application/json", "User-Agent": browser_ua},
+                        )
+                        data = resp.json()
+                        records = data.get("records") or []
+                        sig = _sig(records)
+                        sigs.append(sig)
+                        ok = (
+                            resp.ok
+                            and isinstance(data.get("model", {}).get("provider"), str)
+                            and len(records) > 0
+                            and sig != legacy_sig
+                        )
+                        log_check(
+                            f"analyze-text 语义[{i}] 200+模型标记+反Mock",
+                            ok,
+                            f"status={resp.status} provider={data.get('model', {}).get('provider', '-')} count={len(records)}",
+                        )
+                    except Exception as e:
+                        log_check(f"analyze-text 语义[{i}]", False, f"ERROR: {e}")
+                if len(sigs) == 2:
+                    log_check(
+                        "analyze-text 动态变更（两次随机输入结果不同）",
+                        sigs[0] != sigs[1],
+                        "records 签名不同" if sigs[0] != sigs[1] else "两次返回相同 records（疑似静态 Mock）",
+                    )
 
             shot = shot_dir / f"qa-ui-home-{int(time.time())}.png"
             page.screenshot(path=str(shot))

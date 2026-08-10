@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getClientIp, checkAntiCrawler, rateLimitRequest } from "@/lib/anti-crawler";
 import { db } from "@/lib/db";
 import { createGatewayClient } from "@/lib/gateway-client";
+import { APP_CONFIG } from "@/lib/app-config";
 
 // 中央网关接入（可选）：配置 GATEWAY_BASE_URL + GATEWAY_APP_KEY 时优先走统一文字分析端点；
 // 网关未配置或不可用时自动回退直连 Gemini / OpenRouter / DeepSeek，避免报错或返回空值。
@@ -254,13 +255,9 @@ function buildModelLabel(provider: TextProviderName, model: string): string {
   return `${PROVIDER_DISPLAY[provider]} (${shortModel})`;
 }
 
-/** 构造文字分析提示词（要求返回 JSON 数组，含 P/F/C 宏量营养素） */
+/** 构造文字分析提示词（来自套娃应用统一配置 app-config，克隆时按应用替换） */
 function buildTextPrompt(text: string, mealType: string): string {
-  return `你是一位专业的营养师。请根据用户的食物描述文本，估算每种食物的营养数据，返回 JSON 数组格式的食物列表。
-每个对象必须包含: food(中文名), food_en(英文名), grams(估算重量克数), calories(卡路里), protein_g(蛋白质克数), fat_g(脂肪克数), carbs_g(碳水克数), confidence(0-1的置信度).
-餐次类型: ${mealType}
-用户描述: ${text}
-只返回 JSON 数组，不要其他文字。`;
+  return APP_CONFIG.prompts.text(text, mealType);
 }
 
 /** A: Google Gemini（文本生成） */

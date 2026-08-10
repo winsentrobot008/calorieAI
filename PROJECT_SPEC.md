@@ -134,16 +134,17 @@ npm run build
 # 2) 独立仓库提交并推送（触发 Vercel 自动部署）
 git add <files> && git commit -m "<desc>" && git push origin main
 
-# 3) 等待部署完成，确认线上 200
+# 3) 语义级 QA（动态语义校验，禁止仅断言 200 OK）
+npm run test:api          # 内置语义探针：analyze-text 随机输入 ×2 + analyze-image ×1
+npm run qa:ui             # 内置语义探针：analyze-text 随机输入 + 反 Mock 断言
+# 规则：AI 分析路由必须断言「动态变更或模型标记」，命中固定 Mock（白米饭/鸡胸肉/西兰花）直接 FAIL；
+#      QA_SEMANTIC=0 可临时跳过（仅本地调试，禁止用于交付）。
+
+# 4) 等待部署完成，确认线上 200
 curl -s -o nul -w "%{http_code}" https://calorie-ai-seven.vercel.app
 
-# 4) 调起质检部门（../qa-inspector）对线上 URL 无头巡检
-cd ../qa-inspector
-QA_INTERACT=1 node scripts/run-qa.mjs https://calorie-ai-seven.vercel.app
-# 断言: 0 Console Error / 0 Uncaught Error (#418) / 0 404 / 0 4xx
-
-# 5) 已登录用户场景专项（复现 #418 触发路径）
-TARGET_URL=https://calorie-ai-seven.vercel.app npx playwright test tests/hydration-logged-in.spec.ts
+# 5) 线上回归：工厂质检脚本（0 Token E2E，写 qa_delivery/reports/latest.md）
+python ../../scripts/qa_inspect.py --url https://calorie-ai-seven.vercel.app
 ```
 
 **全绿判定**：QA 巡检 `1 passed` 且无 `❌ 质检未通过` 输出，方视为交付完成。

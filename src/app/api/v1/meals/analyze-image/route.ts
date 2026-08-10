@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getClientIp, checkAntiCrawler, rateLimitRequest } from "@/lib/anti-crawler";
 import { db } from "@/lib/db";
 import { createGatewayClient } from "@/lib/gateway-client";
+import { APP_CONFIG } from "@/lib/app-config";
 
 // 中央网关接入（可选）：配置 GATEWAY_BASE_URL + GATEWAY_APP_KEY 时启用
 const gateway = createGatewayClient({
@@ -288,12 +289,9 @@ function buildModelLabel(provider: ProviderName, model: string): string {
   return `${PROVIDER_DISPLAY[provider]} (${shortModel})`;
 }
 
-/** 构造统一的识图提示词（要求返回含食物名称/重量/卡路里/蛋白质/脂肪/碳水的 JSON 数组） */
+/** 构造统一的识图提示词（来自套娃应用统一配置 app-config，克隆时按应用替换） */
 function buildPrompt(mealType: string): string {
-  return `你是一位专业的营养师。请分析这张食物照片，返回 JSON 数组格式的食物列表。
-每个对象必须包含: food(中文名), food_en(英文名), grams(估算重量克数), calories(卡路里), protein_g(蛋白质克数), fat_g(脂肪克数), carbs_g(碳水克数), confidence(0-1的置信度).
-餐次类型: ${mealType}
-只返回 JSON 数组，不要其他文字。`;
+  return APP_CONFIG.prompts.image(mealType);
 }
 
 /** A: Google Gemini Vision（原生多模态接口） */

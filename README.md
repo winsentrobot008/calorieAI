@@ -387,8 +387,13 @@ npm run test:routes      # 路由/API 路径静态校验
 npm run build            # 生产构建（prebuild 自动跑 test:routes + TypeScript 校验）
 
 # ── 单元 / 冒烟 ──
-npm run test:api         # 动态 API 冒烟（启动服务逐个请求 /api 路由，断言 0 404）
-npm test                 # = test:routes + test:api
+npm run test:api         # 动态 API 冒烟 + 语义探针（analyze-text 随机输入 ×2 + analyze-image ×1，反 Mock 断言）
+npm test                 # = test:routes + test:api（含语义探针）
+
+# ── 语义级 QA 规范（禁止仅断言 200 OK）──
+#  · AI 分析路由必须随机输入并断言「动态变更或模型标记」；
+#  · 命中固定 Mock（白米饭/鸡胸肉/西兰花）直接 FAIL 挂起；
+#  · QA_SEMANTIC=0 可临时跳过（仅本地调试，禁止用于交付）。
 
 # ── 官方 QA 回归（0 Token 成本 · 线上静默 E2E 巡检）──
 python scripts/qa_inspect.py --url https://calorie-ai-seven.vercel.app
