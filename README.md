@@ -452,3 +452,15 @@ python scripts/qa_inspect.py --url https://calorie-ai-seven.vercel.app
 | [`../../projects/central-gateway/README.md`](../../projects/central-gateway/README.md) | **SaaS Central Gateway**：统一 AI/支付/积分网关与密钥集中托管 |
 | [`scripts/check-stripe-config.mjs`](scripts/check-stripe-config.mjs) | Stripe 配置检测工具 |
 | [`scripts/test-stripe-e2e.mjs`](scripts/test-stripe-e2e.mjs) | 支付全链路 E2E 测试 |
+
+---
+
+## 📜 14. 版本记录
+
+| 日期 | 版本 | 变更内容 |
+|------|------|----------|
+| 2026.08 | **v3.4** | 引入【语义级 QA 反 Mock 门禁】（smoke-api/qa_ui 动态语义探针：随机输入 + Provider 标记 + Mock 签名 FAIL 阻断）与【10 分钟套娃克隆引擎】（app-config.ts 集中控制 App-ID/Prompt/配色；配套 git008 `clone_app.mjs` + `TEMPLATE_APP.md`） |
+| 2026.08 | v3.3 | 文字输入分析真实化：analyze-text 网关优先 + A/B/C 直连回退，返回 records/items/totalKcal/PFC 汇总 |
+| 2026.08 | v3.2 | Credits Top-up 一次性付款（弃订阅）+ 管理后台鉴权隐身 + qa:ui 脚本 |
+| 2026.08 | v3.1 | 交叉对抗 QA：Stripe 支付方式降级修复、TTS 调试 UI 下线 |
+| 2026.08 | v3.0 | SaaS 矩阵架构：Central Gateway + 套娃应用矩阵 + 1-Step Clone |

@@ -134,11 +134,17 @@ npm run build
 # 2) 独立仓库提交并推送（触发 Vercel 自动部署）
 git add <files> && git commit -m "<desc>" && git push origin main
 
-# 3) 语义级 QA（动态语义校验，禁止仅断言 200 OK）
-npm run test:api          # 内置语义探针：analyze-text 随机输入 ×2 + analyze-image ×1
-npm run qa:ui             # 内置语义探针：analyze-text 随机输入 + 反 Mock 断言
-# 规则：AI 分析路由必须断言「动态变更或模型标记」，命中固定 Mock（白米饭/鸡胸肉/西兰花）直接 FAIL；
-#      QA_SEMANTIC=0 可临时跳过（仅本地调试，禁止用于交付）。
+# 3) 语义级 QA 反 Mock 门禁（动态语义校验，禁止仅断言 200 OK）
+#    · scripts/smoke-api.mjs（npm run test:api）语义探针：
+#        analyze-text 随机输入 ×2 → 断言 200 + model.provider 标记 + records 非空
+#                                  + 两次结果动态变更 + 反 Mock 签名；
+#        analyze-image 极小 PNG ×1 → 断言非 Mock，成功需模型标记、失败需可诊断 code。
+#    · scripts/qa_ui.py（npm run qa:ui）语义探针：
+#        analyze-text 随机输入 ×2 → 同上断言（探针携带浏览器 UA 规避 WAF）。
+#    · 硬编码 Mock 签名（白米饭|200|260 / 鸡胸肉|150|247 / 西兰花|100|34）一旦命中 → 强制 FAIL 阻断；
+#    · QA_SEMANTIC=0 可临时跳过（仅本地调试，禁止用于交付）。
+npm run test:api
+npm run qa:ui
 
 # 4) 等待部署完成，确认线上 200
 curl -s -o nul -w "%{http_code}" https://calorie-ai-seven.vercel.app
@@ -155,6 +161,18 @@ python ../../scripts/qa_inspect.py --url https://calorie-ai-seven.vercel.app
 2. **Git 隔离**：提交在 `./calorieai` 独立仓库内执行（`git -C calorieai …`），不得影响其他子文件夹。
 3. **质检调度**：QA 巡检在 `./qa-inspector` 目录执行（协议识别已豁免 `blob:`/`data:` 等合法对象 URL）。
 
+### 7.1 10 分钟套娃克隆引擎（v3.4 · Template Convergence）
+
+| 组件 | 位置 | 职责 |
+|------|------|------|
+| **统一应用配置** | `src/lib/app-config.ts` | 集中控制 **App-ID / 品牌名 / AI Prompt（识图+文字）/ 主题配色**——克隆时唯一必改的代码文件 |
+| **一键克隆引擎** | `git008/scripts/clone_app.mjs` | `node scripts/clone_app.mjs petai` 自动复制模版 + 全局重命名（`calorieai→petai`、`CalorieAI→PetAI`、`calorie-ai-seven→petai-seven`、仓库 URL），自动排除 `.git/node_modules/.next/qa-logs/data/.env.local*`，并打印 10 分钟上线清单 |
+| **克隆规范** | `git008/TEMPLATE_APP.md` | 结构映射表 + 10 分钟 SOP（克隆 → 差异化 → 密钥 → 网关注册 → 本地门禁 → 全自动 Vercel 部署） |
+
+**配置收敛机制**：`analyze-image` / `analyze-text` 的 Prompt 统一取自 `app-config.ts`（网关 PROMPTS 表与其保持同步），i18n 已抽离全部文案、主题色收敛于 `theme` 字段。新套娃应用只需改动 **App-ID + Prompt + UI 配色** 三类配置即可复用网关 SDK、积分收银、DAL、管理后台与语义级 QA 全链路。
+
+> 附录 B 为手工剥离 SOP；v3.4 起推荐直接使用 `clone_app.mjs` 一键自动化，两种方式共用同一门禁。
+
 ## 8. 质量门禁
 
 | 门禁 | 位置 | 作用 |
@@ -163,7 +181,9 @@ python ../../scripts/qa_inspect.py --url https://calorie-ai-seven.vercel.app
 | pre-commit / pre-push | `.githooks/` | Commit/Push 前强制跑质量门，失败拦截 |
 | 构建 | `next build`（prebuild） | TypeScript + 静态页面生成校验 |
 | 动态 API 冒烟 | `scripts/smoke-api.mjs`（`npm run test:api`） | 启动服务逐个请求所有 `/api` 路由，断言 0 404 |
-| E2E 巡检 | `../qa-inspector` | console / pageerror / 4xx / 404 / requestfailed 全量拦截 |
+| **语义级 QA 反 Mock 门禁** | `scripts/smoke-api.mjs` + `scripts/qa_ui.py`（v3.4） | AI 路由随机输入 + Provider 标记 + 动态变更断言；硬编码 Mock 签名（白米饭/鸡胸肉/西兰花）命中即 FAIL 阻断 |
+| UI 语义探针 | `npm run qa:ui` | DOM 隐身/积分包/多语言主题 + `analyze-text` 随机输入语义断言（浏览器 UA 规避 WAF） |
+| E2E 巡检 | `git008/scripts/qa_inspect.py` | console / pageerror / 4xx / 404 / requestfailed 全量拦截（写 `qa_delivery/reports/latest.md`） |
 
 ## 9. Agent 行为守则
 
@@ -190,6 +210,18 @@ python ../../scripts/qa_inspect.py --url https://calorie-ai-seven.vercel.app
 |------|------|
 | [`README.md`](README.md) | 项目对外说明：技术栈、快速启动、QA 质检指令 |
 | [`MEMORY.md`](MEMORY.md) | 项目记忆：技术栈/目录/规范 + 历史 Bug 自愈履历与关键决策 |
+
+---
+
+## 11. 版本记录
+
+| 日期 | 版本 | 变更内容 |
+|------|------|----------|
+| 2026.08 | **v3.4** | 引入【语义级 QA 反 Mock 门禁】（smoke-api/qa_ui 动态语义探针：随机输入 + Provider 标记 + Mock 签名 FAIL 阻断）与【10 分钟套娃克隆引擎】（clone_app.mjs + TEMPLATE_APP.md + app-config.ts 集中控制 App-ID/Prompt/配色），实现套娃矩阵标准化 |
+| 2026.08 | v3.3 | 文字输入分析真实化：analyze-text 网关优先 + Gemini/OpenRouter/DeepSeek A/B/C 回退，返回 records/items/totalKcal/PFC 汇总 |
+| 2026.08 | v3.2 | Credits Top-up 一次性付款（弃订阅）+ 管理后台鉴权隐身 + qa:ui 脚本 |
+| 2026.08 | v3.1 | 交叉对抗 QA：Stripe 支付方式降级修复、TTS 调试 UI 下线 |
+| 2026.08 | v3.0 | SaaS 矩阵架构：Central Gateway + 套娃应用矩阵 + 1-Step Clone |
 
 ---
 
@@ -232,6 +264,8 @@ QA_INTERACT=1 node scripts/run-qa.mjs https://<new-project>.vercel.app
 > 合并自原 `TEMPLATE.md`。用于「以 calorieAI 为模板初始化新项目 [X]」。
 
 ### B.1 一键套娃步骤
+
+> v3.4 起推荐直接运行 `git008/scripts/clone_app.mjs <target>` 一键克隆（见 §7.1）；以下为等价的手工 SOP。
 
 ```bash
 # 1) 复制通用架构（从本仓库）
