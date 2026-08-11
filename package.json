@@ -12,6 +12,7 @@
     "test:api": "node scripts/smoke-api.mjs",
     "test:e2e": "python ../../scripts/qa_inspect.py --url http://127.0.0.1:3100",
     "qa:ui": "python scripts/qa_ui.py --url http://127.0.0.1:3100",
+    "demo:visual": "python scripts/ceo_visual_demo.py",
     "deploy:prod": "node scripts/deploy-prod.mjs",
     "prebuild": "npm run test:routes"
   },
