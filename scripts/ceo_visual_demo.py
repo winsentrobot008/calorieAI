@@ -2,15 +2,16 @@
 """
 ceo_visual_demo.py — CEO 专属拟人化慢速可视化深度巡检（Playwright Visual Demo）
 
-视觉特效（Canvas 注入，页面最外层渲染）：
-  - 高亮红色光标 + 蓝色追随光圈（平滑滞后，人眼可见移动轨迹）；
+视觉特效（Canvas 注入，页面最外层渲染；隐藏原生光标，红点 Pointer 跟手）：
+  - 高亮红色 Pointer + 蓝色半透明追随光环（平滑滞后，人眼可见移动轨迹）；
   - smooth_move 轨迹动画：光标划过屏幕留下淡出路径；
   - 点击涟漪：mouse/pointer/touch 触发点生成 40px 红色扩散波纹。
 
 全 UI / 逻辑深度巡检路径（对齐 PROJECT_SPEC 所有分支）：
   步骤 A  多语言与导航：中文/EN 切换 + 依次点击【记录饮食】【数据看板】【个人设置】校验渲染
   步骤 B  餐次全覆盖：早餐 / 午餐 / 晚餐 / 加餐 依次慢速点击
-  步骤 C  文字与识图：逐字输入复杂文本 → AI 汇总；上传 demo-food.jpg → 捕获“图片已优化 (XXKB)”
+  步骤 C  文字与识图：逐字输入「吃了2个包子和1杯豆浆」→ AI 汇总 + 积分 -1；
+          扫描 TEMP 目录真实图片（无则回退 demo-food.jpg）逐张上传 → 捕获“图片已优化 (XXKB)”
           并验证【小笼包 (X颗 / 约XXg)】与整盘总热量
   步骤 D  商业与广告：看广告领积分（+10）；充值/Pro → Stripe 3 套卡片 → 模拟购买跳转 Checkout
 
@@ -23,6 +24,7 @@ ceo_visual_demo.py — CEO 专属拟人化慢速可视化深度巡检（Playwrig
 import argparse
 import json
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -32,8 +34,28 @@ from playwright.sync_api import sync_playwright
 ROOT = Path(__file__).resolve().parent.parent
 DEMO_URL = "https://calorie-ai-seven.vercel.app/"
 ASSET = ROOT / "scripts" / "assets" / "demo-food.jpg"
+TEMP_DIR = ROOT.parent.parent / "TEMP"  # git008/TEMP（仓库根下的本地真实图片集）
 SHOT_DIR = ROOT / "qa-logs"
 SLOW_MO = 1200  # 所有操作放慢 1.2s
+
+
+def collect_demo_images():
+    """扫描本地 TEMP 目录图片（.jpg/.jpeg/.png，≤3MB 取前 3 张）；
+    始终附加 scripts/assets/demo-food.jpg 作为“数量清点”校验锚点；
+    TEMP 无图片时复制 demo-food.jpg 回退。"""
+    imgs = []
+    if TEMP_DIR.exists():
+        for ext in ("*.jpg", "*.jpeg", "*.png"):
+            imgs.extend(TEMP_DIR.glob(ext))
+    imgs = [p for p in imgs if p.is_file() and p.stat().st_size <= 3 * 1024 * 1024]
+    imgs = sorted(imgs)[:3]
+    if ASSET.exists() and ASSET.name not in {p.name for p in imgs}:
+        imgs.append(ASSET)
+    if not imgs:
+        TEMP_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ASSET, TEMP_DIR / "demo-food.jpg")
+        imgs = [TEMP_DIR / "demo-food.jpg"]
+    return imgs
 
 IPHONE_UA = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
@@ -186,6 +208,7 @@ def main():
             ctx = browser.new_context(viewport={"width": 1280, "height": 800})
         page = ctx.new_page()
         page.add_script_tag(content=FX_JS)
+        page.add_style_tag(content="html, body, body * { cursor: none !important; }")
         page.on("console", lambda m: report["console_errors"].append(m.text) if m.type == "error" else None)
 
         page.goto(args.url, wait_until="domcontentloaded", timeout=60000)
@@ -248,50 +271,67 @@ def main():
             page.wait_for_timeout(800)
             textarea = page.locator(".card:has(textarea) textarea")
             textarea.click(timeout=8000)
-            page.keyboard.type("吃了2个包子、1个鸡蛋、1杯牛奶", delay=140)
+            page.keyboard.type("吃了2个包子和1杯豆浆", delay=140)
             page.wait_for_timeout(600)
+            credits_before = read_credits()
             page.click(".card:has(textarea) button.submit-btn", timeout=8000)
             page.wait_for_selector(".food-item", timeout=90000)
             page.wait_for_timeout(1500)
             names = [el.inner_text().strip().splitlines()[0] for el in page.query_selector_all(".food-item .food-name")]
             total_el = page.query_selector(".food-item:has(.food-name:has-text('总')) .food-nutrition")
             total = total_el.inner_text() if total_el else ""
+            credits_after = read_credits()
             shot("C1-text")
-            report["findings"]["C-text"] = {"names": names, "total": total}
-            return f"文字识别 {names}；Total: {total}"
+            report["findings"]["C-text"] = {"names": names, "total": total, "credits_before": credits_before, "credits_after": credits_after}
+            delta = f"积分 {credits_before} → {credits_after}"
+            return f"文字识别 {names}；Total: {total}；{delta}"
 
         step("步骤C-a 文字输入+AI汇总", step_c_text)
 
         def step_c_image():
+            images = collect_demo_images()
+            log(f"TEMP 图片集: {[p.name for p in images]}")
             page.click(".tab:has-text('拍照')", timeout=8000)
             page.wait_for_timeout(800)
-            with page.expect_file_chooser() as fc_info:
-                page.click(".upload-btn >> nth=1", timeout=10000)
-            fc_info.value.set_files(str(ASSET))
-            page.wait_for_selector(".preview-thumb", timeout=10000)
-            page.wait_for_timeout(1000)
-            page.click(".card:has(.preview-thumb) button.submit-btn", timeout=10000)
-            # 捕获“图片已优化 (XXKB)” Toast
-            toast_seen = None
-            deadline = time.time() + 15
-            while time.time() < deadline:
-                body = page.inner_text("body")
-                m = re.search(r"图片已优化\s*\(([\d.]+KB)\)", body)
-                if m:
-                    toast_seen = m.group(0)
-                    break
-                page.wait_for_timeout(300)
-            page.wait_for_selector(".food-item", timeout=120000)
-            page.wait_for_timeout(1500)
-            names = [el.inner_text().strip().splitlines()[0] for el in page.query_selector_all(".food-item .food-name")]
-            counted = [n for n in names if re.search(r"\(\s*\d+\s*(颗|块|个|碗|份|只|串|片)", n)]
-            shot("C2-image")
-            report["findings"]["C-image"] = {"toast": toast_seen, "names": names, "counted": counted}
-            if not counted:
-                raise AssertionError(f"未识别出带数量的食物名称: {names}")
-            return f"Toast={toast_seen}；带数量名称 {counted}"
+            per_image = []
+            for img in images:
+                with page.expect_file_chooser() as fc_info:
+                    page.click(".upload-btn >> nth=1", timeout=10000)
+                fc_info.value.set_files(str(img))
+                page.wait_for_selector(".preview-thumb", timeout=10000)
+                page.wait_for_timeout(1000)
+                page.click(".card:has(.preview-thumb) button.submit-btn", timeout=10000)
+                # 捕获“图片已优化 (XXKB)” Toast
+                toast_seen = None
+                deadline = time.time() + 15
+                while time.time() < deadline:
+                    body = page.inner_text("body")
+                    m = re.search(r"图片已优化\s*\(([\d.]+KB)\)", body)
+                    if m:
+                        toast_seen = m.group(0)
+                        break
+                    page.wait_for_timeout(300)
+                # 等待结果（非食物图可能 0 项，最多等 45s 后继续）
+                names, total, counted = [], "", []
+                try:
+                    page.wait_for_selector(".food-item", timeout=45000)
+                    page.wait_for_timeout(1500)
+                    names = [el.inner_text().strip().splitlines()[0] for el in page.query_selector_all(".food-item .food-name")]
+                    counted = [n for n in names if re.search(r"\(\s*\d+\s*(颗|块|个|碗|份|只|串|片)", n)]
+                    total_el = page.query_selector(".food-item:has(.food-name:has-text('总')) .food-nutrition")
+                    total = total_el.inner_text() if total_el else ""
+                except Exception:
+                    page.wait_for_timeout(3000)  # 非食物图：AI 返回 0 项，等待识别流程结束
+                per_image.append({"file": img.name, "toast": toast_seen, "names": names, "counted": counted, "total": total})
+                log(f"  [{img.name}] toast={toast_seen} names={names} counted={counted}")
+                shot(f"C2-{img.stem[:18]}")
+            report["findings"]["C-image"] = per_image
+            all_counted = [n for p in per_image for n in p["counted"]]
+            if not all_counted:
+                raise AssertionError(f"所有图片均未识别出带数量的食物名称: {[p['names'] for p in per_image]}")
+            return f"共 {len(images)} 张图；带数量名称: {all_counted}"
 
-        step("步骤C-b 识图（数量+整盘总热量）", step_c_image)
+        step("步骤C-b TEMP 图片集识图（数量+整盘总热量）", step_c_image)
 
         # ── 步骤 D：商业与广告 ───────────────────────────────────
         def step_d_ad():
