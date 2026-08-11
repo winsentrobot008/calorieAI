@@ -347,7 +347,7 @@ function MealRecorder({
 
       const data = await res.json();
       setResult(data.records || []);
-      // 日志面板直接打印命中模型名（例如 "Gemini (gemini-2.0-flash)"）
+      // 日志面板直接打印命中模型名（例如 "Gemini (gemini-2.5-flash)"）
       const modelLabel = data.model?.label || (data.model ? `${data.model.provider} (${data.model.model || "unknown"})` : "");
       if (modelLabel) addLog(`[AI] 识别模型: ${modelLabel}`);
       addLog(`[AI] 识别到 ${data.count} 种食物`);

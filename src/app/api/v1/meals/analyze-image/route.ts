@@ -23,7 +23,7 @@ const gateway = createGatewayClient({
  *                               会快速失败并交回回退链 / 返回可诊断错误）
  *
  * 可选模型覆盖:
- *   - GEMINI_MODEL      （默认 gemini-2.0-flash）
+ *   - GEMINI_MODEL      （默认 gemini-2.5-flash）
  *   - OPENROUTER_MODEL  （默认 openai/gpt-4o-mini）
  *   - DEEPSEEK_MODEL    （默认 deepseek-chat）
  *
@@ -42,8 +42,8 @@ const gateway = createGatewayClient({
  *     }>,
  *     model: {
  *       provider: string,   // 命中提供商: gemini | openrouter | deepseek
- *       model: string,      // 实际使用的模型 ID（如 gemini-2.0-flash / openai/gpt-4o-mini）
- *       label: string,      // 展示名（如 "Gemini (gemini-2.0-flash)" / "OpenRouter (gpt-4o-mini)"）
+ *       model: string,      // 实际使用的模型 ID（如 gemini-2.5-flash / openai/gpt-4o-mini）
+ *       label: string,      // 展示名（如 "Gemini (gemini-2.5-flash)" / "OpenRouter (gpt-4o-mini)"）
  *       switched: boolean,  // 是否为回退提供商命中
  *       attempts: number    // 实际尝试过的提供商数量
  *     }
@@ -283,7 +283,7 @@ const PROVIDER_DISPLAY: Record<ProviderName, string> = {
   deepseek: "DeepSeek",
 };
 
-/** 生成前端可直接展示的模型名，如 "Gemini (gemini-2.0-flash)" / "OpenRouter (gpt-4o-mini)" */
+/** 生成前端可直接展示的模型名，如 "Gemini (gemini-2.5-flash)" / "OpenRouter (gpt-4o-mini)" */
 function buildModelLabel(provider: ProviderName, model: string): string {
   const shortModel = provider === "openrouter" ? model.split("/").pop() || model : model;
   return `${PROVIDER_DISPLAY[provider]} (${shortModel})`;
@@ -301,7 +301,7 @@ async function analyzeWithGemini(
   mealType: string,
   apiKey: string
 ): Promise<AnalysisResult> {
-  const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
     {
