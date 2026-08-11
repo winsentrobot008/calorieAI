@@ -6,6 +6,7 @@ import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
 import { Sun, Moon, Mic, X } from "lucide-react";
 import { t, useLocale } from "@/lib/i18n";
 import { CREDIT_PACKS, type CreditPack } from "@/lib/credit-packs";
+import { compressImageFile } from "@/lib/image-utils";
 import LocaleSwitcher from "@/components/locale-switcher";
 import {
   readCredits,
@@ -264,8 +265,17 @@ function MealRecorder({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [insufficientOpen, setInsufficientOpen] = useState(false);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
+
+  // 轻量 Toast（自动 3.5s 消失），用于上传/识别错误与进度反馈
+  const showToast = (msg: string) => {
+    setToastMsg(msg);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastMsg(null), 3500);
+  };
 
   // 仅做本地预览，不触发任何 AI API 请求（API 降本：禁用自动识图）
   const handleImageSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -295,10 +305,27 @@ function MealRecorder({
 
     setAnalyzing(true); setResult(null); setSummary(null);
     addLog(`[AI] 开始识图: ${selectedFile.name} (${(selectedFile.size / 1024).toFixed(1)} KB)`);
+    showToast(t("ai_optimizing"));
 
     try {
+      // ── 客户端压缩：Canvas 最长边 1024 / JPEG 0.8 / ≤500KB（规避 Vercel 413）──
+      let payload = selectedFile;
+      try {
+        const compressed = await compressImageFile(selectedFile);
+        payload = compressed.file;
+        addLog(
+          `[Compress] ${compressed.originalType || "?"} ${(compressed.originalSize / 1024).toFixed(1)}KB → JPEG ${(compressed.finalSize / 1024).toFixed(1)}KB (${compressed.width}x${compressed.height})`
+        );
+        showToast(t("toast_image_optimized", { size: `${(compressed.finalSize / 1024).toFixed(0)}KB` }));
+      } catch (compressErr: any) {
+        const code = compressErr?.message || "";
+        if (code === "HEIC_DECODE_FAILED") throw new Error(t("upload_error_unsupported"));
+        if (code === "STILL_TOO_LARGE") throw new Error(t("upload_error_large"));
+        throw new Error(t("upload_error_compress"));
+      }
+
       const fd = new FormData();
-      fd.append("file", selectedFile);
+      fd.append("file", payload);
       fd.append("meal_type", mealType);
 
       const res = await fetch(`${API}/v1/meals/analyze-image`, {
@@ -306,28 +333,38 @@ function MealRecorder({
         body: fd,
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        setResult(data.records || []);
-        // 日志面板直接打印命中模型名（例如 "Gemini (gemini-2.0-flash)"）
-        const modelLabel = data.model?.label || (data.model ? `${data.model.provider} (${data.model.model || "unknown"})` : "");
-        if (modelLabel) addLog(`[AI] 识别模型: ${modelLabel}`);
-        addLog(`[AI] 识别到 ${data.count} 种食物`);
-        data.records?.forEach((rec: any) => {
-          addLog(`  ${rec.food} — ${rec.calories} kcal (P${rec.protein_g}/F${rec.fat_g}/C${rec.carbs_g})`);
-        });
-
-        // 识别成功后自动扣除 1 积分（Pro 用户无限次，免扣）
-        if (!isPro) {
-          onSpendCredit();
-          addLog("[Credits] 识别成功，扣除 1 积分");
+      if (!res.ok) {
+        let detail = "";
+        try {
+          detail = (await res.json()).detail || "";
+        } catch {
+          /* keep empty */
         }
-      } else {
-        const err = await res.text();
-        addLog(`[Error] ${err.slice(0, 100)}`);
+        // 413（Body 超限）给出可读提示；其余错误透出后端 detail
+        if (res.status === 413) throw new Error(t("upload_error_large"));
+        throw new Error(detail || `HTTP ${res.status}`);
       }
+
+      const data = await res.json();
+      setResult(data.records || []);
+      // 日志面板直接打印命中模型名（例如 "Gemini (gemini-2.0-flash)"）
+      const modelLabel = data.model?.label || (data.model ? `${data.model.provider} (${data.model.model || "unknown"})` : "");
+      if (modelLabel) addLog(`[AI] 识别模型: ${modelLabel}`);
+      addLog(`[AI] 识别到 ${data.count} 种食物`);
+      data.records?.forEach((rec: any) => {
+        addLog(`  ${rec.food} — ${rec.calories} kcal (P${rec.protein_g}/F${rec.fat_g}/C${rec.carbs_g})`);
+      });
+
+      // 识别成功后自动扣除 1 积分（Pro 用户无限次，免扣）
+      if (!isPro) {
+        onSpendCredit();
+        addLog("[Credits] 识别成功，扣除 1 积分");
+      }
+      showToast(t("recognition_success", { count: data.count ?? (data.records || []).length }));
     } catch (err: any) {
-      addLog(`[Error] ${err.message}`);
+      const msg = err?.message || t("upload_error_network");
+      addLog(`[Error] ${msg}`);
+      showToast(msg);
     }
     setAnalyzing(false);
   };
@@ -381,6 +418,11 @@ function MealRecorder({
 
   return (
     <div>
+      {toastMsg && (
+        <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 9999, background: "#1e293b", color: "#f8fafc", padding: "10px 16px", borderRadius: 10, fontSize: 13, boxShadow: "0 8px 24px rgba(0,0,0,.35)", maxWidth: "90vw", textAlign: "center" }}>
+          {toastMsg}
+        </div>
+      )}
       <div className="card"><div className="card-title">{t("select_meal_type")}</div>
         <div className="meal-type-row">{MEAL_TYPES.map(mt => (<button key={mt.value} className={`meal-type-btn ${mealType === mt.value ? "active" : ""}`} onClick={() => setMealType(mt.value)}>{t(mt.labelKey)}</button>))}</div>
       </div>
@@ -393,7 +435,7 @@ function MealRecorder({
       {previewUrl && (<div className="card"><div className="card-title">{t("image_preview")}</div>
         <img src={previewUrl} alt="food preview" className="preview-thumb" />
         <button className="submit-btn" style={{ marginTop: 10, width: "100%" }} disabled={!previewUrl || analyzing} onClick={handleAnalyze}>
-          {analyzing ? <span className="spinner" /> : t("start_ai_recognition")}
+          {analyzing ? <><span className="spinner" /> {t("ai_optimizing")}</> : t("start_ai_recognition")}
         </button>
       </div>)}
       {mode === "image" && (<div className="card"><div className="card-title">{t("upload_food_photo")}</div><div className="upload-area">
