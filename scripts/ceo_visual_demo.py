@@ -354,7 +354,23 @@ def export_fast_video(page, out_path, head_trim=0.0):
     cmd = [ffmpeg, "-y"]
     if head_trim > 0:
         cmd += ["-ss", f"{head_trim:.2f}"]
-    cmd += ["-i", str(src), "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-an", str(tmp)]
+    # 高码率 + 高兼容性：libx264 slow 压制 / 3Mbps 恒定码率（nal-hrd=cbr 强制达标——
+    # 静态 UI 内容下 CRF/ABR 会严重欠码至 0.6~2.3MB，5M CBR 则超 10MB 上限）/
+    # yuv420p（Windows 媒体播放器原生支持）/ faststart（moov 前置，秒开不黑屏）
+    cmd += [
+        "-i", str(src),
+        "-c:v", "libx264",
+        "-preset", "slow",
+        "-pix_fmt", "yuv420p",
+        "-b:v", "3M",
+        "-minrate", "3M",
+        "-maxrate", "3M",
+        "-bufsize", "6M",
+        "-x264-params", "nal-hrd=cbr",
+        "-movflags", "+faststart",
+        "-an",
+        str(tmp),
+    ]
     subprocess.run(cmd, capture_output=True, timeout=300, check=True)
     if tmp.exists():
         shutil.move(str(tmp), str(out_path))
