@@ -414,6 +414,9 @@ python scripts/ceo_visual_demo.py --mode mobile
 # 快节奏短视频模式（slowMo=150ms · 自动录屏导出 TEMP/calorieai_demo_fast.mp4）
 python scripts/ceo_visual_demo.py --fast
 
+# YouTube Shorts 英文宣推（locale en-US 全英文 UI · Edge-TTS 美音解说 4 段 · 导出 TEMP/calorieai_yt_promo_en.mp4）
+python scripts/ceo_visual_demo.py --promo-en
+
 # 本地联调
 python scripts/ceo_visual_demo.py --url http://127.0.0.1:3100
 ```

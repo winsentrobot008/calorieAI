@@ -25,6 +25,9 @@ ceo_visual_demo.py — CEO 专属拟人化慢速可视化深度巡检（Playwrig
                                                      # 内置演示应答快节奏出片（动作序列 ~18s，加载头自动裁剪），
                                                      # 自动录屏并导出
                                                      # TEMP/calorieai_demo_fast.mp4
+  python scripts/ceo_visual_demo.py --promo-en       # YouTube Shorts 英文宣推视频：locale en-US 全英文 UI +
+                                                     # Edge-TTS 美音解说 4 段（intro/scan/pro/CTA）+ 高码率高清 MP4
+                                                     # （TEMP/calorieai_yt_promo_en.mp4）
 """
 
 # 注入式 Toast 日志：MutationObserver 捕获瞬时 Toast（fast 模式下“图片已优化 (XXKB)”
@@ -39,7 +42,7 @@ TOAST_CATCH_JS = r"""
   };
   const scan = () => {
     for (const el of document.querySelectorAll('body *')) {
-      if (el.children.length === 0 && /图片已优化|识别成功|积分不足|上传|失败/.test(el.textContent || '')) {
+      if (el.children.length === 0 && /图片已优化|Image optimized|识别成功|Recognized|积分不足|Insufficient|上传|失败|Error/.test(el.textContent || '')) {
         push(el.textContent.trim());
       }
     }
@@ -75,8 +78,11 @@ TEMP_DIR = ROOT.parent.parent / "TEMP"  # git008/TEMP（仓库根下的本地真
 SHOT_DIR = ROOT / "qa-logs"
 SLOW_MO = 1200  # 所有操作放慢 1.2s
 FAST_SLOW_MO = 150  # --fast 模式：所有操作 0.15s
+PROMO_SLOW_MO = 250  # --promo-en 模式：宣推节奏 0.25s
 FAST_VIDEO = TEMP_DIR / "calorieai_demo_fast.mp4"  # 短视频导出落盘路径
+PROMO_VIDEO = TEMP_DIR / "calorieai_yt_promo_en.mp4"  # YouTube Shorts 英文宣推视频导出路径
 FAST_MODE = False  # 由 main() 依据 --fast 设置
+PROMO_EN = False  # 由 main() 依据 --promo-en 设置
 HUMAN_STEPS = 25  # 轨迹步进：默认 25 步；fast 模式压缩为 8 步
 
 
@@ -239,6 +245,10 @@ FX_JS = r"""
 # 数量名称 / 数量+约重（如 “小笼包 (9 颗 / 约 270g)”）识别锚点
 QTY_RE = re.compile(r"\(\s*\d+\s*(?:颗|块|个|碗|份|只|串|片|杯|盘)")
 QTY_G_RE = re.compile(r"\(\s*\d+\s*(?:颗|块|个|碗|份|只|串|片|杯|盘)\s*[/／、|]\s*约\s*\d+\s*(?:g|G|克)\s*\)")
+EN_QTY_G_RE = re.compile(
+    r"\(\s*\d+\s*(?:pcs?|pieces?|servings?|bowls?|cups?|slices?|sticks?|buns?)\s*[/／]\s*approx\.?\s*\d+\s*g\s*\)",
+    re.I,
+)
 
 
 def log(msg):
@@ -264,10 +274,10 @@ def human_click(page, selector, timeout=10000, steps=None):
 
 
 def parse_credits(text):
-    """从积分角标文案解析数字，如 '🎯 积分: 9' -> 9。"""
+    """从积分角标文案解析数字，如 '🎯 积分: 9' / '🎯 Credits: 9' -> 9。"""
     if not text:
         return None
-    m = re.search(r"积分[:：]?\s*(\d+)", text)
+    m = re.search(r"(?:积分|Credits)[:：]?\s*(\d+)", text)
     return int(m.group(1)) if m else None
 
 
@@ -329,6 +339,177 @@ def mock_image_route(route):
     route.fulfill(status=200, content_type="application/json", body=json.dumps(IMAGE_FAST_RESPONSE, ensure_ascii=False))
 
 
+# ── --promo-en 英文演示应答（仅英文宣推视频模式拦截 analyze 接口）──
+TEXT_EN_RESPONSE = {
+    "records": [
+        {"food": "Steamed Buns", "food_en": "Steamed Buns", "grams": 160, "calories": 280, "protein_g": 10, "fat_g": 6, "carbs_g": 44, "confidence": 0.95},
+        {"food": "Soy Milk", "food_en": "Soy Milk", "grams": 250, "calories": 120, "protein_g": 8, "fat_g": 3, "carbs_g": 12, "confidence": 0.93},
+    ],
+    "items": [
+        {"food": "Steamed Buns", "food_en": "Steamed Buns", "grams": 160, "calories": 280, "protein_g": 10, "fat_g": 6, "carbs_g": 44, "confidence": 0.95},
+        {"food": "Soy Milk", "food_en": "Soy Milk", "grams": 250, "calories": 120, "protein_g": 8, "fat_g": 3, "carbs_g": 12, "confidence": 0.93},
+    ],
+    "totalKcal": 400, "totalProtein": 18, "totalFat": 9, "totalCarbs": 56,
+    "count": 2,
+    "model": {"provider": "gemini", "model": "promo-en-demo", "label": "Promo EN (built-in response)"},
+}
+
+IMAGE_EN_RESPONSE = {
+    "records": [
+        {"food": "Steamed Buns (9 pcs / approx. 270g)", "food_en": "Steamed Buns", "grams": 270, "calories": 540, "protein_g": 40, "fat_g": 22, "carbs_g": 54, "confidence": 0.92},
+    ],
+    "totalKcal": 540, "totalProtein": 40, "totalFat": 22, "totalCarbs": 54,
+    "count": 1,
+    "model": {"provider": "gemini", "model": "promo-en-demo", "label": "Promo EN (built-in response)"},
+}
+
+
+def mock_text_en_route(route):
+    route.fulfill(status=200, content_type="application/json", body=json.dumps(TEXT_EN_RESPONSE, ensure_ascii=False))
+
+
+def mock_image_en_route(route):
+    route.fulfill(status=200, content_type="application/json", body=json.dumps(IMAGE_EN_RESPONSE, ensure_ascii=False))
+
+
+# ── YouTube Shorts 英文宣推：Edge-TTS 解说（en-US-ChristopherNeural / en-US-JennyNeural）──
+PROMO_AUDIO = [
+    ("intro", "en-US-ChristopherNeural", "Tired of counting calories one by one? Check this out."),
+    ("scan", "en-US-JennyNeural", "Just snap a photo of your meal. AI automatically counts every item and sums up the calories instantly!"),
+    ("pro", "en-US-JennyNeural", "Unlock unlimited AI scans with quick Stripe checkout."),
+    ("cta", "en-US-ChristopherNeural", "Try 3 free scans today. Link in description!"),
+]
+
+
+def generate_promo_audio(audio_dir):
+    """调用 Edge-TTS 生成 4 段英文解说 mp3，返回 {key: path}（失败为 None）。"""
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    result = {}
+    try:
+        import asyncio
+        import edge_tts
+    except Exception as e:
+        log(f"[TTS] edge-tts 不可用: {e}")
+        return result
+    for key, voice, text in PROMO_AUDIO:
+        path = audio_dir / f"{key}.mp3"
+        try:
+            async def _gen():
+                com = edge_tts.Communicate(text, voice, rate="+10%")
+                await com.save(str(path))
+            asyncio.run(_gen())
+            if path.exists() and path.stat().st_size > 0:
+                result[key] = str(path)
+                log(f"  [TTS] {key} <- {voice} ({path.stat().st_size} bytes)")
+            else:
+                log(f"  [TTS] {key} 生成文件为空")
+        except Exception as e:
+            log(f"  [TTS] {key} 失败: {e}")
+    return result
+
+
+def mp3_to_wav(mp3_path, wav_path):
+    """mp3 → 44100Hz 立体声 wav（供 winsound 实时播放）。"""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        try:
+            import imageio_ffmpeg
+            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            return None
+    subprocess.run(
+        [ffmpeg, "-y", "-i", str(mp3_path), "-ar", "44100", "-ac", "2", str(wav_path)],
+        capture_output=True, timeout=120, check=True,
+    )
+    return wav_path if Path(wav_path).exists() else None
+
+
+def play_audio_async(wav_path):
+    """本机实时播放解说（Windows winsound 异步）；无 winsound 时静默跳过。"""
+    if not wav_path or not Path(wav_path).exists():
+        return
+    try:
+        import winsound
+        winsound.PlaySound(str(wav_path), winsound.SND_FILENAME | winsound.SND_ASYNC)
+    except Exception:
+        pass
+
+
+def probe_duration(path):
+    """ffprobe 读取媒体时长（秒），失败返回 0。"""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return 0.0
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, text=True, timeout=60,
+        )
+        return float(out.stdout.strip())
+    except Exception:
+        return 0.0
+
+
+def export_promo_video(src, out_path, audio_paths, offsets_ms, head_trim, video_dur):
+    """将录制 webm 与 4 段 TTS 解说按时间轴混音，导出高码率高清英文宣推 MP4。
+    转码参数：-c:v libx264 -preset slow -crf 18 -pix_fmt yuv420p -b:v 6M -movflags +faststart。"""
+    if not src or not Path(src).exists():
+        return {"ok": False, "error": f"录制文件不存在: {src}"}
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        try:
+            import imageio_ffmpeg
+            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            ffmpeg = None
+    if not ffmpeg:
+        return {"ok": False, "error": "ffmpeg 不可用，无法合成音轨"}
+
+    tmp = out_path.with_suffix(".tmp.mp4")
+    inputs = [ffmpeg, "-y"]
+    if head_trim > 0:
+        inputs += ["-ss", f"{head_trim:.2f}"]
+    inputs += ["-i", str(src)]
+    # 固定 4 段音频输入顺序（intro=1 / scan=2 / pro=3 / cta=4），缺失段用静音占位
+    for key in ("intro", "scan", "pro", "cta"):
+        if key in audio_paths:
+            inputs += ["-i", str(audio_paths[key])]
+        else:
+            inputs += ["-f", "lavfi", "-t", "0.2", "-i", "anullsrc=r=44100:cl=stereo"]
+
+    labels = {"intro": "1", "scan": "2", "pro": "3", "cta": "4"}
+    chains, mix_inputs = [], []
+    for key, off in offsets_ms.items():
+        idx = labels[key]
+        chains.append(f"[{idx}:a]aresample=44100,aformat=channel_layouts=stereo,adelay={off}|{off}[a{idx}]")
+        mix_inputs.append(f"[a{idx}]")
+    filter_complex = ";".join(chains) + f";{''.join(mix_inputs)}amix=inputs=4:duration=longest:normalize=0,apad[aout]"
+
+    cmd = inputs + [
+        "-filter_complex", filter_complex,
+        "-map", "0:v", "-map", "[aout]",
+        "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p", "-b:v", "6M",
+        "-movflags", "+faststart",
+        "-c:a", "aac", "-b:a", "192k",
+        "-t", f"{video_dur:.2f}",
+        str(tmp),
+    ]
+    subprocess.run(cmd, capture_output=True, timeout=600, check=True)
+    if tmp.exists():
+        shutil.move(str(tmp), str(out_path))
+    return {
+        "ok": True,
+        "src": str(src),
+        "dest": str(out_path),
+        "bytes": out_path.stat().st_size if out_path.exists() else 0,
+        "offsets_ms": offsets_ms,
+        "head_trim_s": round(head_trim, 2),
+        "video_dur_s": round(video_dur, 2),
+    }
+
+
 def export_fast_video(page, out_path, head_trim=0.0):
     """将 Playwright record_video_dir 录制的 webm 转码为 H.264 MP4 并落盘；
     head_trim 秒剪掉页面加载头，让出片直接进入快节奏演示动作。"""
@@ -385,29 +566,44 @@ def export_fast_video(page, out_path, head_trim=0.0):
 
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    global FAST_MODE, HUMAN_STEPS
-    parser = argparse.ArgumentParser(description="CEO 拟人化慢速可视化深度巡检 / 快节奏短视频模式")
+    global FAST_MODE, PROMO_EN, HUMAN_STEPS
+    parser = argparse.ArgumentParser(description="CEO 拟人化慢速可视化深度巡检 / 快节奏短视频 / YouTube Shorts 英文宣推")
     parser.add_argument("--url", default=DEMO_URL)
     parser.add_argument("--mode", choices=["desktop", "mobile"], default="desktop")
     parser.add_argument("--fast", action="store_true",
                         help="快节奏短视频模式：slowMo=150ms、human_move 8 步、内置演示应答（analyze 接口拦截）、"
                              "小笼包高光停顿 1s、自动录屏并导出 TEMP/calorieai_demo_fast.mp4")
+    parser.add_argument("--promo-en", action="store_true",
+                        help="YouTube Shorts 英文宣推视频：locale en-US 全英文 UI、Edge-TTS 美音解说 4 段"
+                             "（intro/scan/pro/CTA）、高码率高清 MP4（TEMP/calorieai_yt_promo_en.mp4）")
     args = parser.parse_args()
+    if args.promo_en:
+        args.mode = "desktop"  # 宣推视频固定桌面端 16:10 画幅
     FAST_MODE = args.fast
-    HUMAN_STEPS = 8 if args.fast else 25
-    slow_mo = FAST_SLOW_MO if args.fast else SLOW_MO
+    PROMO_EN = args.promo_en
+    HUMAN_STEPS = 8 if args.fast else (12 if args.promo_en else 25)
+    slow_mo = FAST_SLOW_MO if args.fast else (PROMO_SLOW_MO if args.promo_en else SLOW_MO)
 
     SHOT_DIR.mkdir(parents=True, exist_ok=True)
     report = {
         "url": args.url,
         "mode": args.mode,
         "fast": args.fast,
+        "promo_en": args.promo_en,
         "slow_mo_ms": slow_mo,
         "steps": [],
         "findings": {},
         "screenshots": [],
         "console_errors": [],
     }
+
+    # Edge-TTS 必须在 Playwright sync 上下文之外生成（sync API 内部已有事件循环，
+    # asyncio.run() 会报 “cannot be called from a running event loop”）
+    promo_audio_paths = {}
+    if args.promo_en:
+        log("🎙️ 生成 Edge-TTS 英文解说（en-US-ChristopherNeural / en-US-JennyNeural）…")
+        promo_audio_paths = generate_promo_audio(SHOT_DIR / "promo-en" / "audio")
+        report["findings"]["promo_audio_mp3"] = promo_audio_paths
 
     def shot(name):
         # fast 模式以视频为唯一产物：跳过常规截图，仅保留小笼包 zoom 高光
@@ -439,8 +635,13 @@ def main():
             return None
 
     def pause(ms):
-        """装饰性等待：fast 模式统一压缩（÷6，下限 60ms），保证快节奏出片。"""
-        page.wait_for_timeout(ms if not FAST_MODE else max(60, ms // 6))
+        """装饰性等待：fast 模式 ÷6（下限 60ms）、promo 模式 ÷4（下限 80ms），保证快节奏出片。"""
+        if FAST_MODE:
+            page.wait_for_timeout(max(60, ms // 6))
+        elif PROMO_EN:
+            page.wait_for_timeout(max(80, ms // 4))
+        else:
+            page.wait_for_timeout(ms)
 
     def wait_url_part(part, timeout=40):
         deadline = time.time() + (15 if FAST_MODE else timeout)
@@ -460,6 +661,12 @@ def main():
             video_dir = SHOT_DIR / "video-fast"
             video_dir.mkdir(parents=True, exist_ok=True)
             ctx_kwargs.update(record_video_dir=str(video_dir), record_video_size={"width": vw, "height": vh})
+        if args.promo_en:
+            # 全英文运行环境：locale en-US + 美东时区
+            ctx_kwargs.update(locale="en-US", timezone_id="America/New_York")
+            promo_video_dir = SHOT_DIR / "video-promo-en"
+            promo_video_dir.mkdir(parents=True, exist_ok=True)
+            ctx_kwargs.update(record_video_dir=str(promo_video_dir), record_video_size={"width": vw, "height": vh})
         ctx = browser.new_context(**ctx_kwargs)
         rec_start = time.monotonic()
         page = ctx.new_page()
@@ -467,6 +674,8 @@ def main():
         # 全局 <canvas id="ceo-pointer-canvas">（z-index:999999!important / pointer-events:none）
         page.add_init_script(script=FX_JS)
         page.add_init_script(script=TOAST_CATCH_JS)
+        if args.promo_en:
+            page.add_init_script(script="try { localStorage.setItem('calorieai_locale', 'en'); } catch (e) {}")
         page.on("console", lambda m: report["console_errors"].append(m.text) if m.type == "error" else None)
 
         ledger = CreditLedger()
@@ -482,20 +691,31 @@ def main():
                 "human_move_steps": 8,
                 "xiaolongbao_highlight_s": 1,
             }
+        if args.promo_en:
+            # 英文宣推出片：英文演示应答（全英文 UI 文案与结果）
+            page.route("**/api/v1/meals/analyze-text*", mock_text_en_route)
+            page.route("**/api/v1/meals/analyze-image*", mock_image_en_route)
+            report["findings"]["promo_en_mode"] = {
+                "note": "locale=en-US 全英文 UI + 内置英文演示应答；真实 AI 识别仅在默认深度巡检模式执行",
+                "human_move_steps": 12,
+                "voice": "en-US-ChristopherNeural / en-US-JennyNeural",
+            }
 
         page.goto(args.url, wait_until="domcontentloaded", timeout=60000)
         pause(2500)
-        log(f"打开站点: {args.url} (mode={args.mode}, slowMo={slow_mo}ms, fast={args.fast})")
+        log(f"打开站点: {args.url} (mode={args.mode}, slowMo={slow_mo}ms, fast={args.fast}, promo_en={args.promo_en})")
 
         # ── 光标巡游：先在视口内划 4 段轨迹，直观展示 Pointer + 蓝色光圈 + 淡出路径 ──
         vw = page.evaluate("() => innerWidth")
         vh = page.evaluate("() => innerHeight")
-        tour = [(vw * 0.16, vh * 0.25), (vw * 0.84, vh * 0.25), (vw * 0.84, vh * 0.72), (vw * 0.16, vh * 0.72)] if not FAST_MODE else [(vw * 0.5, vh * 0.3), (vw * 0.5, vh * 0.7)]
-        tour_start = time.monotonic()
-        for tx, ty in tour:
-            human_move(page, tx, ty)
-        pause(1000)
-        log("光标巡游完成：8px red Pointer + 20px blue glow + 15 点淡出尾迹已展示")
+        tour_start = rec_start
+        if not args.promo_en:
+            tour = [(vw * 0.16, vh * 0.25), (vw * 0.84, vh * 0.25), (vw * 0.84, vh * 0.72), (vw * 0.16, vh * 0.72)] if not FAST_MODE else [(vw * 0.5, vh * 0.3), (vw * 0.5, vh * 0.7)]
+            tour_start = time.monotonic()
+            for tx, ty in tour:
+                human_move(page, tx, ty)
+            pause(1000)
+            log("光标巡游完成：8px red Pointer + 20px blue glow + 15 点淡出尾迹已展示")
 
         # ── 步骤 A：多语言与导航 ────────────────────────────────
         def step_a():
@@ -534,8 +754,6 @@ def main():
                 pause(800)
             return f"导航 3 Tab 渲染 + EN/中文 切换校验通过（{nav_en}）"
 
-        step("步骤A 多语言与导航", step_a)
-
         # ── 步骤 B：餐次全覆盖 ───────────────────────────────────
         def step_b():
             checked = []
@@ -547,8 +765,6 @@ def main():
                 checked.append(label)
             shot("B-mealtypes")
             return f"餐次全覆盖: {' / '.join(checked)}"
-
-        step("步骤B 餐次全覆盖", step_b)
 
         # ── 步骤 C：文字与识图 ───────────────────────────────────
         def step_c_text():
@@ -594,8 +810,6 @@ def main():
             elif delta is not None:
                 delta_note += f"（本地扣 1 积分，服务端同步余额波动，观测最小差 {delta:+d}）"
             return f"文字识别 {names}；Total: {total}；{delta_note}"
-
-        step("步骤C-a 文字输入+AI汇总", step_c_text)
 
         def step_c_image():
             images = collect_demo_images(fast=FAST_MODE)
@@ -682,8 +896,6 @@ def main():
                 )
             return f"共 {len(images)} 张图；数量+约重: {all_g}；带数量名称: {all_counted}"
 
-        step("步骤C-b TEMP 图片集识图（数量+整盘总热量）", step_c_image)
-
         # ── 步骤 D：商业与广告 ───────────────────────────────────
         def step_d_ad():
             before = read_credits()
@@ -707,8 +919,6 @@ def main():
             shot("D1-ad-rewarded")
             report["findings"]["D-ad"] = {"before": before, "after": after}
             return f"积分 {before} → {after}（看广告 +10）"
-
-        step("步骤D-a 看广告领积分(+10)", step_d_ad)
 
         def step_d_billing():
             pause(800)
@@ -737,14 +947,251 @@ def main():
                 pause(2000)
             return f"Stripe 3 卡片展示并跳转 Checkout: {checkout_url[:80]}..."
 
-        step("步骤D-b 充值/Pro + Checkout 跳转", step_d_billing)
+        # ── Promo-EN：YouTube Shorts 英文宣推流程（全英文 UI + 4 段美音解说）──
+        def run_promo_en(audio_paths):
+            wav_map = {}
+            for k, p in audio_paths.items():
+                w = mp3_to_wav(p, Path(p).with_suffix(".wav"))
+                if w:
+                    wav_map[k] = str(w)
+            report["findings"]["promo_audio"] = {"mp3": audio_paths, "wav": wav_map}
+            offsets_raw = {}
+
+            # 巡游（轨迹展示）→ Audio1 Intro
+            vw2 = page.evaluate("() => innerWidth")
+            vh2 = page.evaluate("() => innerHeight")
+            tour = [(vw2 * 0.16, vh2 * 0.3), (vw2 * 0.84, vh2 * 0.3), (vw2 * 0.5, vh2 * 0.7)]
+            tour_start = time.monotonic()
+            for tx, ty in tour:
+                human_move(page, tx, ty)
+            pause(1200)
+            play_audio_async(wav_map.get("intro"))
+            offsets_raw["intro"] = 200
+            log("[VO] Audio1 Intro 播放中…")
+
+            def p_step_a():
+                nav = [el.inner_text().strip() for el in page.query_selector_all("nav.tab-bar button")]
+                assert "Log Meal" in nav, f"EN 导航缺失: {nav}"
+                human_click(page, "nav.tab-bar button:has-text('Log Meal')", timeout=8000)
+                page.wait_for_selector(".meal-type-btn", timeout=8000)
+                shot("P-A1-log")
+                human_click(page, "nav.tab-bar button:has-text('Dashboard')", timeout=8000)
+                page.wait_for_selector(".cal-ring-container", timeout=8000)
+                shot("P-A2-dash")
+                human_click(page, "nav.tab-bar button:has-text('Profile')", timeout=8000)
+                pause(1200)
+                assert len(page.query_selector_all("main input, main select")) > 0
+                shot("P-A3-profile")
+                human_click(page, "nav.tab-bar button:has-text('Log Meal')", timeout=8000)
+                page.wait_for_selector(".meal-type-btn", timeout=8000)
+                return f"EN 导航 3 Tab 渲染通过（{nav}）"
+
+            step("Promo-A 英文导航", p_step_a)
+
+            def p_step_b():
+                checked = []
+                for label in ["Breakfast", "Lunch", "Dinner", "Snack"]:
+                    human_click(page, f".meal-type-btn:has-text('{label}')", timeout=8000)
+                    pause(500)
+                    active = page.inner_text(".meal-type-btn.active", timeout=3000)
+                    assert active == label, f"EN 餐次激活异常: {active} != {label}"
+                    checked.append(label)
+                shot("P-B-meals")
+                return f"EN 餐次: {' / '.join(checked)}"
+
+            step("Promo-B 英文餐次", p_step_b)
+
+            def p_step_c_text():
+                human_click(page, ".tab:has-text('Text Input')", timeout=8000)
+                pause(800)
+                human_click(page, ".card:has(textarea) textarea", timeout=8000)
+                page.keyboard.type("I ate 2 steam buns and 1 cup of soy milk.", delay=25)
+                pause(600)
+                credits_before = read_credits()
+                human_click(page, ".card:has(textarea) button.submit-btn", timeout=8000)
+                page.wait_for_selector(".food-item", timeout=30000)
+                observed = []
+                deadline = time.time() + 2.5
+                while time.time() < deadline:
+                    c = parse_credits(read_credits())
+                    if c is not None:
+                        observed.append(c)
+                    pause(250)
+                pause(800)
+                names = [el.inner_text().strip().splitlines()[0] for el in page.query_selector_all(".food-item .food-name")]
+                total_el = page.query_selector(".food-item:has(.food-name:has-text('Total')) .food-nutrition")
+                total = total_el.inner_text() if total_el else ""
+                shot("P-C1-text")
+                before_n = parse_credits(credits_before)
+                min_seen = min(observed) if observed else None
+                delta = (min_seen - before_n) if (min_seen is not None and before_n is not None) else None
+                report["findings"]["promo_text"] = {
+                    "text": "I ate 2 steam buns and 1 cup of soy milk.",
+                    "names": names,
+                    "total": total,
+                    "credits_delta": delta,
+                }
+                assert any("Steamed Buns" in n for n in names), f"未识别 Steamed Buns: {names}"
+                assert any("Soy Milk" in n for n in names), f"未识别 Soy Milk: {names}"
+                assert "kcal" in total.lower(), f"EN 总热量缺失: {total!r}"
+                return f"EN 文字识别 {names}；Total: {total}；积分差 {delta}"
+
+            step("Promo-C-a 英文文字输入+AI汇总", p_step_c_text)
+
+            def p_step_c_image():
+                human_click(page, ".tab:has-text('Photo / Upload')", timeout=8000)
+                pause(800)
+                img = collect_demo_images(fast=True)[0]
+                with page.expect_file_chooser() as fc_info:
+                    human_click(page, ".upload-btn >> nth=1", timeout=10000)
+                fc_info.value.set_files(str(img))
+                page.wait_for_selector(".preview-thumb", timeout=10000)
+                pause(800)
+                scan_ts = time.monotonic()
+                human_click(page, ".card:has(.preview-thumb) button.submit-btn", timeout=10000)
+                toast_seen = None
+                deadline = time.time() + 3
+                while time.time() < deadline:
+                    try:
+                        logs = page.evaluate("() => window.__toastLog || []")
+                        m = next((t for t in logs if ("Image optimized" in t or "图片已优化" in t)), None)
+                        if m:
+                            toast_seen = m
+                            break
+                    except Exception:
+                        pass
+                    body = page.inner_text("body")
+                    m2 = re.search(r"(?:图片已优化|Image optimized)\s*\(([\d.]+KB)\)", body)
+                    if m2:
+                        toast_seen = m2.group(0)
+                        break
+                    pause(250)
+                names, total, counted_en = [], "", []
+                try:
+                    page.wait_for_selector(".food-item", timeout=30000)
+                    pause(1200)
+                    names = [el.inner_text().strip().splitlines()[0] for el in page.query_selector_all(".food-item .food-name")]
+                    counted_en = [n for n in names if EN_QTY_G_RE.search(n)]
+                    total_el = page.query_selector(".food-item:has(.food-name:has-text('Total')) .food-nutrition")
+                    total = total_el.inner_text() if total_el else ""
+                except Exception:
+                    pause(2000)
+                if counted_en:
+                    assert "kcal" in total.lower(), f"EN 整盘总热量缺失: {total!r}"
+                highlight = None
+                if counted_en:
+                    highlight = page.evaluate("""() => {
+                      const cards = Array.from(document.querySelectorAll('.food-item'));
+                      const card = cards.find(el => /approx\\./.test(el.innerText))
+                        || cards.find(el => /pcs/.test(el.innerText));
+                      if (!card) return null;
+                      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      card.style.transition = 'transform .35s ease, box-shadow .35s ease, outline .35s ease';
+                      card.style.transform = 'scale(1.08)';
+                      card.style.outline = '4px solid #ff3c3c';
+                      card.style.boxShadow = '0 0 0 4px #ff3c3c, 0 0 26px rgba(255,60,60,.85)';
+                      card.style.borderRadius = '12px';
+                      card.style.position = 'relative';
+                      card.style.zIndex = '50';
+                      card.style.background = '#fff';
+                      return card.innerText.split('\\n')[0];
+                    }""")
+                    page.wait_for_timeout(2000)
+                    log(f"  [Promo] 🎯 高亮英文卡片: {highlight}")
+                    shot("P-C2-scan-zoom")
+                play_audio_async(wav_map.get("scan"))
+                offsets_raw["scan"] = int(max(100, (scan_ts - tour_start) * 1000))
+                log(f"[VO] Audio2 Scan @ {offsets_raw['scan']}ms")
+                per_image = {
+                    "file": img.name,
+                    "toast": toast_seen,
+                    "names": names,
+                    "counted_en": counted_en,
+                    "total": total,
+                    "highlight": highlight,
+                }
+                report["findings"]["promo_image"] = per_image
+                assert counted_en, f"未识别英文数量名称（pcs/approx）: {names}"
+                return f"EN 识图 {names}；Total: {total}；toast={toast_seen}"
+
+            step("Promo-C-b 英文识图（pcs/approx + 总热量）", p_step_c_image)
+
+            def p_step_d_ad():
+                human_click(page, ".ad-reward-btn", timeout=10000)
+                page.wait_for_selector(".ad-modal", timeout=8000)
+                shot("P-D1-ad")
+                page.wait_for_timeout(900)
+                human_click(page, ".ad-modal .modal-close", timeout=5000)
+                return "EN 广告弹窗展示并关闭"
+
+            step("Promo-D-a 英文广告弹窗", p_step_d_ad)
+
+            def p_step_d_billing():
+                pause(600)
+                pro_ts = time.monotonic()
+                human_click(page, "button.btn-upgrade", timeout=10000)
+                page.wait_for_selector(".billing-modal", timeout=8000)
+                pause(800)
+                cards = page.query_selector_all(".billing-modal .plan-card")
+                assert len(cards) == 3, f"EN 积分包卡片数量异常: {len(cards)}"
+                shot("P-D2-cards")
+                human_click(page, ".billing-modal .plan-card .plan-btn >> nth=0", timeout=8000)
+                page.wait_for_selector(".payment-method-btn", timeout=8000)
+                human_click(page, ".payment-method-btn:has-text('Credit / Debit Card')", timeout=8000)
+                page.wait_for_selector(".stripe-pay-btn", timeout=8000)
+                shot("P-D2-pay")
+                play_audio_async(wav_map.get("pro"))
+                offsets_raw["pro"] = int(max(100, (pro_ts - tour_start) * 1000))
+                log(f"[VO] Audio3 Pro @ {offsets_raw['pro']}ms")
+                human_click(page, ".stripe-pay-btn", timeout=10000)
+                checkout_url = wait_url_part("checkout.stripe.com", timeout=45)
+                if not checkout_url:
+                    raise AssertionError("未跳转到 Stripe Checkout")
+                shot("P-D2-checkout")
+                report["findings"]["promo_billing"] = {"cards": len(cards), "checkout_url": checkout_url}
+                return f"EN Stripe 3 卡片展示并跳转 Checkout: {checkout_url[:70]}..."
+
+            step("Promo-D-b 英文充值/Pro + Checkout", p_step_d_billing)
+
+            # CTA 收尾
+            pause(1000)
+            play_audio_async(wav_map.get("cta"))
+            log("[VO] Audio4 CTA 播放中…")
+            return {"audio_paths": audio_paths, "offsets_raw": offsets_raw, "tour_start": tour_start}
+
+        if args.promo_en:
+            promo = run_promo_en(promo_audio_paths)
+        else:
+            step("步骤A 多语言与导航", step_a)
+            step("步骤B 餐次全覆盖", step_b)
+            step("步骤C-a 文字输入+AI汇总", step_c_text)
+            step("步骤C-b TEMP 图片集识图（数量+整盘总热量）", step_c_image)
+            step("步骤D-a 看广告领积分(+10)", step_d_ad)
+            step("步骤D-b 充值/Pro + Checkout 跳转", step_d_billing)
 
         pause(1500)
         shot("final")
         ctx.close()
         browser.close()
 
-        if args.fast:
+        if args.promo_en:
+            promo_audio = promo["audio_paths"]
+            offsets = dict(promo["offsets_raw"])
+            head_trim = promo["tour_start"] - rec_start
+            orig_dur = probe_duration(page.video.path())
+            video_dur = max(1.0, orig_dur - head_trim)
+            dur4 = probe_duration(promo_audio.get("cta")) if promo_audio.get("cta") else 0.0
+            cta_off = max(offsets.get("pro", 1000) + 1000, (video_dur - dur4 - 0.8) * 1000) if dur4 > 0 else (video_dur - 2.0) * 1000
+            offsets["cta"] = int(max(100, min(cta_off, (video_dur - 1.0) * 1000)))
+            for k in ("intro", "scan", "pro"):
+                offsets[k] = int(max(100, min(offsets.get(k, 100), (video_dur - 0.5) * 1000)))
+            video_info = export_promo_video(page.video.path(), PROMO_VIDEO, promo_audio, offsets, head_trim, video_dur)
+            report["findings"]["promo_video"] = video_info
+            if video_info.get("ok"):
+                log(f"🎬 YouTube Shorts 英文宣推视频已导出: {video_info.get('dest')}（{video_info.get('bytes', 0) / 1024 / 1024:.1f}MB，时长 {video_info.get('video_dur_s')}s，音轨偏移 {offsets}ms）")
+            else:
+                log(f"❌ 宣推视频导出失败: {video_info.get('error')}")
+        elif args.fast:
             head_trim = tour_start - rec_start
             video_info = export_fast_video(page, FAST_VIDEO, head_trim=head_trim)
             report["findings"]["video"] = video_info
@@ -758,7 +1205,7 @@ def main():
     (SHOT_DIR / "demo-result.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     (SHOT_DIR / f"demo-result-{args.mode}.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print("=" * 60)
-    print(f"CEO VISUAL DEMO DEEP: {'PERFECT PLAY ✅' if ok else 'HAS ISSUES ❌'} (mode={args.mode}, slowMo={slow_mo}ms, fast={args.fast})")
+    print(f"CEO VISUAL DEMO DEEP: {'PERFECT PLAY ✅' if ok else 'HAS ISSUES ❌'} (mode={args.mode}, slowMo={slow_mo}ms, fast={args.fast}, promo_en={args.promo_en})")
     for s in report["steps"]:
         print(f"  {'✅' if s['ok'] else '❌'} {s['name']} ({s['elapsed']}s)")
     print(f"report={SHOT_DIR / 'demo-result.json'}")
