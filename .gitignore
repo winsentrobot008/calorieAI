@@ -48,5 +48,11 @@ next-env.d.ts
 # runtime data (subscriptions, cache, etc.)
 /data/
 
+# CEO visual demo artifacts (screenshots + JSON reports)
+/qa-logs/
+
+# python caches
+__pycache__/
+
 # local backup files (env snapshots, config copies)
 *.backup

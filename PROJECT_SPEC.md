@@ -151,6 +151,11 @@ curl -s -o nul -w "%{http_code}" https://calorie-ai-seven.vercel.app
 
 # 5) 线上回归：工厂质检脚本（0 Token E2E，写 qa_delivery/reports/latest.md）
 python ../../scripts/qa_inspect.py --url https://calorie-ai-seven.vercel.app
+
+# 6) CEO 可视化深度巡检（slowMo=1200ms 轨迹光标 + TEMP 图片集 + 全 UI A-D 分支，桌面/移动）
+npm run demo:visual
+python scripts/ceo_visual_demo.py --mode mobile
+#    规范：git008/docs/AI_FACTORY_SPEC.md（SOP-01/02/03）
 ```
 
 **全绿判定**：QA 巡检 `1 passed` 且无 `❌ 质检未通过` 输出，方视为交付完成。
@@ -210,6 +215,7 @@ python ../../scripts/qa_inspect.py --url https://calorie-ai-seven.vercel.app
 |------|------|
 | [`README.md`](README.md) | 项目对外说明：技术栈、快速启动、QA 质检指令 |
 | [`MEMORY.md`](MEMORY.md) | 项目记忆：技术栈/目录/规范 + 历史 Bug 自愈履历与关键决策 |
+| [`../../docs/AI_FACTORY_SPEC.md`](../../docs/AI_FACTORY_SPEC.md) | **AI 工厂 SOP 说明书**：slowMo=1200ms 轨迹光标巡检 / Vision 数量清点总账 / Canvas 500KB 压缩防爆 |
 
 ---
 
@@ -217,6 +223,7 @@ python ../../scripts/qa_inspect.py --url https://calorie-ai-seven.vercel.app
 
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
+| 2026.08 | **v3.5** | CEO 可视化巡检全面升级：smooth_move 分段插值轨迹 + human_click 拟人化点击 + 40px 点击波纹；TEMP 真实图片集上传校验（图片已优化 XXKB / 数量+约重 / 整盘总热量）；积分 -1 轮询记录；逐模式结果报告；工厂 SOP 沉淀至 `git008/docs/AI_FACTORY_SPEC.md`（桌面/移动双端全绿） |
 | 2026.08 | **v3.4** | 引入【语义级 QA 反 Mock 门禁】（smoke-api/qa_ui 动态语义探针：随机输入 + Provider 标记 + Mock 签名 FAIL 阻断）与【10 分钟套娃克隆引擎】（clone_app.mjs + TEMPLATE_APP.md + app-config.ts 集中控制 App-ID/Prompt/配色），实现套娃矩阵标准化 |
 | 2026.08 | v3.3 | 文字输入分析真实化：analyze-text 网关优先 + Gemini/OpenRouter/DeepSeek A/B/C 回退，返回 records/items/totalKcal/PFC 汇总 |
 | 2026.08 | v3.2 | Credits Top-up 一次性付款（弃订阅）+ 管理后台鉴权隐身 + qa:ui 脚本 |

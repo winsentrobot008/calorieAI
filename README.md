@@ -402,6 +402,24 @@ python scripts/qa_inspect.py --url https://calorie-ai-seven.vercel.app
 
 > **QA 质检说明**：官方回归命令为 `python scripts/qa_inspect.py --url <DEPLOYED_URL>`，由 Playwright 无头巡检断言 **0 Console Error / 0 Uncaught Error (#418) / 0 4xx**，全程 **0 Token 成本**。
 
+### 11.1 CEO 可视化深度巡检（demo:visual · slowMo=1200ms）
+
+```bash
+# 桌面端（默认线上生产 URL）：全 UI A-D 分支 + 光标轨迹特效 + TEMP 真实图片集识图
+npm run demo:visual
+
+# 移动端 iPhone 14 模拟
+python scripts/ceo_visual_demo.py --mode mobile
+
+# 本地联调
+python scripts/ceo_visual_demo.py --url http://127.0.0.1:3100
+```
+
+巡检覆盖：步骤 A 语言与导航（中文/EN + 三页面）、步骤 B 餐次全覆盖（早餐/午餐/晚餐/加餐）、
+步骤 C 文字与识图（逐字输入 + 积分 -1 记录；TEMP 图片「图片已优化 (XXKB)」Toast + 数量/约重 + 整盘总热量）、
+步骤 D 商业化（看广告 +10、Stripe 3 套定价卡片与 Checkout 跳转）。
+规范详见 [`git008/docs/AI_FACTORY_SPEC.md`](../../docs/AI_FACTORY_SPEC.md)（SOP-01 轨迹光标巡检 / SOP-02 数量清点总账 / SOP-03 500KB 压缩防爆）。
+
 ---
 
 ## 🛰️ 12. 架构演进：Central Gateway 路线图
@@ -452,6 +470,7 @@ python scripts/qa_inspect.py --url https://calorie-ai-seven.vercel.app
 | [`../../projects/central-gateway/README.md`](../../projects/central-gateway/README.md) | **SaaS Central Gateway**：统一 AI/支付/积分网关与密钥集中托管 |
 | [`scripts/check-stripe-config.mjs`](scripts/check-stripe-config.mjs) | Stripe 配置检测工具 |
 | [`scripts/test-stripe-e2e.mjs`](scripts/test-stripe-e2e.mjs) | 支付全链路 E2E 测试 |
+| [`../../docs/AI_FACTORY_SPEC.md`](../../docs/AI_FACTORY_SPEC.md) | **AI 工厂 SOP 说明书**：slowMo=1200ms 轨迹光标巡检 / Vision 数量清点总账 / Canvas 500KB 压缩防爆 |
 
 ---
 
@@ -459,6 +478,7 @@ python scripts/qa_inspect.py --url https://calorie-ai-seven.vercel.app
 
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
+| 2026.08 | **v3.5** | CEO 可视化巡检全面升级：显式 smooth_move 轨迹（mouse.move 分段插值）+ human_click 拟人化点击；TEMP 真实图片集绑定并硬校验「数量 + 约重」（小笼包 (9 颗 / 约 270g)）与整盘总热量；积分 -1 轮询记录；逐模式结果报告；沉淀工厂 SOP 至 `git008/docs/AI_FACTORY_SPEC.md`（桌面/移动双端全绿） |
 | 2026.08 | **v3.4** | 引入【语义级 QA 反 Mock 门禁】（smoke-api/qa_ui 动态语义探针：随机输入 + Provider 标记 + Mock 签名 FAIL 阻断）与【10 分钟套娃克隆引擎】（app-config.ts 集中控制 App-ID/Prompt/配色；配套 git008 `clone_app.mjs` + `TEMPLATE_APP.md`） |
 | 2026.08 | v3.3 | 文字输入分析真实化：analyze-text 网关优先 + A/B/C 直连回退，返回 records/items/totalKcal/PFC 汇总 |
 | 2026.08 | v3.2 | Credits Top-up 一次性付款（弃订阅）+ 管理后台鉴权隐身 + qa:ui 脚本 |

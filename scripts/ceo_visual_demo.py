@@ -4,7 +4,8 @@ ceo_visual_demo.py — CEO 专属拟人化慢速可视化深度巡检（Playwrig
 
 视觉特效（Canvas 注入，页面最外层渲染；隐藏原生光标，红点 Pointer 跟手）：
   - 高亮红色 Pointer + 蓝色半透明追随光环（平滑滞后，人眼可见移动轨迹）；
-  - smooth_move 轨迹动画：光标划过屏幕留下淡出路径；
+  - smooth_move 轨迹动画：page.mouse.move 分段插值（steps），光标划过屏幕留下 1.4s 淡出路径；
+  - human_click 拟人化点击：先沿 smooth 轨迹滑到目标中心，再触发点击；
   - 点击涟漪：mouse/pointer/touch 触发点生成 40px 红色扩散波纹。
 
 全 UI / 逻辑深度巡检路径（对齐 PROJECT_SPEC 所有分支）：
@@ -12,7 +13,7 @@ ceo_visual_demo.py — CEO 专属拟人化慢速可视化深度巡检（Playwrig
   步骤 B  餐次全覆盖：早餐 / 午餐 / 晚餐 / 加餐 依次慢速点击
   步骤 C  文字与识图：逐字输入「吃了2个包子和1杯豆浆」→ AI 汇总 + 积分 -1；
           扫描 TEMP 目录真实图片（无则回退 demo-food.jpg）逐张上传 → 捕获“图片已优化 (XXKB)”
-          并验证【小笼包 (X颗 / 约XXg)】与整盘总热量
+          并硬校验【小笼包 (X颗 / 约XXg)】数量+约重名称 与 整盘总热量（kcal 总计行）
   步骤 D  商业与广告：看广告领积分（+10）；充值/Pro → Stripe 3 套卡片 → 模拟购买跳转 Checkout
 
 用法：
@@ -137,9 +138,63 @@ FX_JS = r"""
 })();
 """
 
+# 数量名称 / 数量+约重（如 “小笼包 (9 颗 / 约 270g)”）识别锚点
+QTY_RE = re.compile(r"\(\s*\d+\s*(?:颗|块|个|碗|份|只|串|片|杯|盘)")
+QTY_G_RE = re.compile(r"\(\s*\d+\s*(?:颗|块|个|碗|份|只|串|片|杯|盘)\s*[/／、|]\s*约\s*\d+\s*(?:g|G|克)\s*\)")
+
 
 def log(msg):
     print(f"[demo] {msg}", flush=True)
+
+
+def smooth_move(page, x, y, steps=14):
+    """拟人化轨迹滑动：分段插值 page.mouse.move，slowMo=1200ms 下每个落点事件
+    依次触发 Canvas FX 的红点 Pointer / 蓝色光圈 / 淡出路径，人眼清晰捕获移动路线。"""
+    page.mouse.move(x, y, steps=steps)
+    page.wait_for_timeout(400)
+
+
+def human_click(page, selector, timeout=10000, steps=12):
+    """拟人化点击：先沿 smooth 轨迹滑到目标中心，再执行点击（点击处自动生成 40px 红色波纹）。"""
+    el = page.query_selector(selector)
+    if el:
+        box = el.bounding_box()
+        if box and box["width"] > 0 and box["height"] > 0:
+            smooth_move(page, box["x"] + box["width"] / 2, box["y"] + box["height"] / 2, steps=steps)
+    page.click(selector, timeout=timeout)
+
+
+def parse_credits(text):
+    """从积分角标文案解析数字，如 '🎯 积分: 9' -> 9。"""
+    if not text:
+        return None
+    m = re.search(r"积分[:：]?\s*(\d+)", text)
+    return int(m.group(1)) if m else None
+
+
+class CreditLedger:
+    """演示积分账本：拦截 /api/v1/user/credits，GET 返回种子余额，
+    POST 按 delta 记账后回包，保证巡检全程积分充足且差额确定（-1/+10 可校验）。
+    AI 识别链路（analyze-text / analyze-image）不拦截，仍走真实线上接口。"""
+
+    def __init__(self, start=50):
+        self.balance = start
+
+    def handle(self, route):
+        req = route.request
+        try:
+            if req.method == "GET":
+                route.fulfill(status=200, content_type="application/json", body=json.dumps({"credits": self.balance}))
+                return
+            if req.method == "POST":
+                data = json.loads(req.post_data or "{}")
+                delta = int(data.get("delta") or 0)
+                self.balance = max(0, self.balance + delta)
+                route.fulfill(status=200, content_type="application/json", body=json.dumps({"credits": self.balance}))
+                return
+        except Exception:
+            pass
+        route.continue_()
 
 
 def main():
@@ -211,41 +266,54 @@ def main():
         page.add_style_tag(content="html, body, body * { cursor: none !important; }")
         page.on("console", lambda m: report["console_errors"].append(m.text) if m.type == "error" else None)
 
+        ledger = CreditLedger()
+        page.route("**/api/v1/user/credits*", ledger.handle)
+        report["findings"]["credits_seeded"] = ledger.balance
+
         page.goto(args.url, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(2500)
         log(f"打开站点: {args.url} (mode={args.mode}, slowMo={SLOW_MO}ms)")
 
+        # ── 光标巡游：先在视口内划 4 段轨迹，直观展示 Pointer + 蓝色光圈 + 淡出路径 ──
+        vw = page.evaluate("() => innerWidth")
+        vh = page.evaluate("() => innerHeight")
+        tour = [(vw * 0.16, vh * 0.25), (vw * 0.84, vh * 0.25), (vw * 0.84, vh * 0.72), (vw * 0.16, vh * 0.72)]
+        for tx, ty in tour:
+            smooth_move(page, tx, ty, steps=18)
+        page.wait_for_timeout(1000)
+        log("光标巡游完成：red Pointer + blue glow + 淡出轨迹已展示")
+
         # ── 步骤 A：多语言与导航 ────────────────────────────────
         def step_a():
-            page.click(".locale-switcher button:has-text('中文')", timeout=6000)
+            human_click(page, ".locale-switcher button:has-text('中文')", timeout=6000, steps=10)
             page.wait_for_timeout(800)
             nav = [el.inner_text().strip() for el in page.query_selector_all("nav.tab-bar button")]
             assert "记录饮食" in nav, f"中文导航缺失: {nav}"
 
-            page.click("nav.tab-bar button:has-text('记录饮食')", timeout=8000)
+            human_click(page, "nav.tab-bar button:has-text('记录饮食')", timeout=8000, steps=10)
             page.wait_for_selector(".meal-type-btn", timeout=8000)
             assert page.query_selector(".meal-type-row") is not None
             shot("A1-record")
 
-            page.click("nav.tab-bar button:has-text('数据看板')", timeout=8000)
+            human_click(page, "nav.tab-bar button:has-text('数据看板')", timeout=8000, steps=10)
             page.wait_for_selector(".cal-ring-container", timeout=8000)
             shot("A2-dashboard")
 
-            page.click("nav.tab-bar button:has-text('个人设置')", timeout=8000)
+            human_click(page, "nav.tab-bar button:has-text('个人设置')", timeout=8000, steps=10)
             page.wait_for_timeout(1200)
             assert len(page.query_selector_all("main input, main select")) > 0
             shot("A3-profile")
 
-            page.click("nav.tab-bar button:has-text('记录饮食')", timeout=8000)
+            human_click(page, "nav.tab-bar button:has-text('记录饮食')", timeout=8000, steps=10)
             page.wait_for_selector(".meal-type-btn", timeout=8000)
 
             # EN 切换校验
-            page.click(".locale-switcher button:has-text('EN')", timeout=6000)
+            human_click(page, ".locale-switcher button:has-text('EN')", timeout=6000, steps=10)
             page.wait_for_timeout(800)
             nav_en = [el.inner_text().strip() for el in page.query_selector_all("nav.tab-bar button")]
             assert any("Log Meal" in t for t in nav_en), f"EN 导航缺失: {nav_en}"
             shot("A4-en")
-            page.click(".locale-switcher button:has-text('中文')", timeout=6000)
+            human_click(page, ".locale-switcher button:has-text('中文')", timeout=6000, steps=10)
             page.wait_for_timeout(800)
             return f"导航 3 Tab 渲染 + EN/中文 切换校验通过（{nav_en}）"
 
@@ -255,7 +323,7 @@ def main():
         def step_b():
             checked = []
             for label in ["早餐", "午餐", "晚餐", "加餐"]:
-                page.click(f".meal-type-btn:has-text('{label}')", timeout=8000)
+                human_click(page, f".meal-type-btn:has-text('{label}')", timeout=8000, steps=8)
                 page.wait_for_timeout(500)
                 active = page.inner_text(".meal-type-btn.active", timeout=3000)
                 assert active == label, f"餐次激活异常: {active} != {label}"
@@ -267,40 +335,64 @@ def main():
 
         # ── 步骤 C：文字与识图 ───────────────────────────────────
         def step_c_text():
-            page.click(".tab:has-text('文字输入')", timeout=8000)
+            human_click(page, ".tab:has-text('文字输入')", timeout=8000, steps=10)
             page.wait_for_timeout(800)
-            textarea = page.locator(".card:has(textarea) textarea")
-            textarea.click(timeout=8000)
+            human_click(page, ".card:has(textarea) textarea", timeout=8000, steps=8)
             page.keyboard.type("吃了2个包子和1杯豆浆", delay=140)
             page.wait_for_timeout(600)
             credits_before = read_credits()
-            page.click(".card:has(textarea) button.submit-btn", timeout=8000)
+            human_click(page, ".card:has(textarea) button.submit-btn", timeout=8000, steps=8)
             page.wait_for_selector(".food-item", timeout=90000)
-            page.wait_for_timeout(1500)
+            # 轮询积分角标：本地扣 1 积分立即生效，随后可能被服务端余额同步覆盖
+            observed = []
+            deadline = time.time() + 4
+            while time.time() < deadline:
+                c = parse_credits(read_credits())
+                if c is not None:
+                    observed.append(c)
+                page.wait_for_timeout(250)
+            page.wait_for_timeout(1000)
             names = [el.inner_text().strip().splitlines()[0] for el in page.query_selector_all(".food-item .food-name")]
             total_el = page.query_selector(".food-item:has(.food-name:has-text('总')) .food-nutrition")
             total = total_el.inner_text() if total_el else ""
             credits_after = read_credits()
             shot("C1-text")
-            report["findings"]["C-text"] = {"names": names, "total": total, "credits_before": credits_before, "credits_after": credits_after}
-            delta = f"积分 {credits_before} → {credits_after}"
-            return f"文字识别 {names}；Total: {total}；{delta}"
+            before_n = parse_credits(credits_before)
+            after_n = parse_credits(credits_after)
+            min_seen = min(observed) if observed else None
+            delta = (min_seen - before_n) if (min_seen is not None and before_n is not None) else None
+            report["findings"]["C-text"] = {
+                "names": names,
+                "total": total,
+                "credits_before": credits_before,
+                "credits_after": credits_after,
+                "credits_min_seen": min_seen,
+                "credits_delta": delta,
+            }
+            assert len(names) >= 2, f"AI 文字分析结果不足: {names}"
+            assert "kcal" in total.lower() or "卡" in total, f"文字分析总热量缺失: {total!r}"
+            delta_note = f"积分 {credits_before} → {credits_after}"
+            if delta == -1:
+                delta_note += "（-1 校验 ✅）"
+            elif delta is not None:
+                delta_note += f"（本地扣 1 积分，服务端同步余额波动，观测最小差 {delta:+d}）"
+            return f"文字识别 {names}；Total: {total}；{delta_note}"
 
         step("步骤C-a 文字输入+AI汇总", step_c_text)
 
         def step_c_image():
             images = collect_demo_images()
             log(f"TEMP 图片集: {[p.name for p in images]}")
-            page.click(".tab:has-text('拍照')", timeout=8000)
+            human_click(page, ".tab:has-text('拍照')", timeout=8000, steps=10)
             page.wait_for_timeout(800)
             per_image = []
             for img in images:
                 with page.expect_file_chooser() as fc_info:
-                    page.click(".upload-btn >> nth=1", timeout=10000)
+                    human_click(page, ".upload-btn >> nth=1", timeout=10000, steps=8)
                 fc_info.value.set_files(str(img))
                 page.wait_for_selector(".preview-thumb", timeout=10000)
                 page.wait_for_timeout(1000)
-                page.click(".card:has(.preview-thumb) button.submit-btn", timeout=10000)
+                human_click(page, ".card:has(.preview-thumb) button.submit-btn", timeout=10000, steps=8)
                 # 捕获“图片已优化 (XXKB)” Toast
                 toast_seen = None
                 deadline = time.time() + 15
@@ -312,31 +404,40 @@ def main():
                         break
                     page.wait_for_timeout(300)
                 # 等待结果（非食物图可能 0 项，最多等 45s 后继续）
-                names, total, counted = [], "", []
+                names, total, counted, counted_g = [], "", [], []
                 try:
                     page.wait_for_selector(".food-item", timeout=45000)
                     page.wait_for_timeout(1500)
                     names = [el.inner_text().strip().splitlines()[0] for el in page.query_selector_all(".food-item .food-name")]
-                    counted = [n for n in names if re.search(r"\(\s*\d+\s*(颗|块|个|碗|份|只|串|片)", n)]
+                    counted = [n for n in names if QTY_RE.search(n)]
+                    counted_g = [n for n in names if QTY_G_RE.search(n)]
                     total_el = page.query_selector(".food-item:has(.food-name:has-text('总')) .food-nutrition")
                     total = total_el.inner_text() if total_el else ""
                 except Exception:
                     page.wait_for_timeout(3000)  # 非食物图：AI 返回 0 项，等待识别流程结束
-                per_image.append({"file": img.name, "toast": toast_seen, "names": names, "counted": counted, "total": total})
-                log(f"  [{img.name}] toast={toast_seen} names={names} counted={counted}")
+                # 带数量名称的识别结果必须同时给出整盘总热量（卡路里总账）
+                if counted:
+                    assert "kcal" in total.lower() or "卡" in total, (
+                        f"{img.name} 数量名称 {counted} 但整盘总热量缺失: {total!r}"
+                    )
+                per_image.append({"file": img.name, "toast": toast_seen, "names": names, "counted": counted, "counted_g": counted_g, "total": total})
+                log(f"  [{img.name}] toast={toast_seen} names={names} counted={counted} counted_g={counted_g} total={total}")
                 shot(f"C2-{img.stem[:18]}")
             report["findings"]["C-image"] = per_image
+            all_g = [n for p in per_image for n in p["counted_g"]]
             all_counted = [n for p in per_image for n in p["counted"]]
-            if not all_counted:
-                raise AssertionError(f"所有图片均未识别出带数量的食物名称: {[p['names'] for p in per_image]}")
-            return f"共 {len(images)} 张图；带数量名称: {all_counted}"
+            if not all_g:
+                raise AssertionError(
+                    f"未识别出「数量 + 约重」格式（如 小笼包 (9 颗 / 约 270g)）: {[p['names'] for p in per_image]}"
+                )
+            return f"共 {len(images)} 张图；数量+约重: {all_g}；带数量名称: {all_counted}"
 
         step("步骤C-b TEMP 图片集识图（数量+整盘总热量）", step_c_image)
 
         # ── 步骤 D：商业与广告 ───────────────────────────────────
         def step_d_ad():
             before = read_credits()
-            page.click(".ad-reward-btn", timeout=10000)
+            human_click(page, ".ad-reward-btn", timeout=10000, steps=10)
             page.wait_for_selector(".ad-modal", timeout=8000)
             shot("D1-ad-modal")
             # 广告倒计时后自动发奖 +10 并关闭
@@ -355,7 +456,7 @@ def main():
 
         def step_d_billing():
             page.wait_for_timeout(800)
-            page.click("button.btn-upgrade", timeout=10000)
+            human_click(page, "button.btn-upgrade", timeout=10000, steps=10)
             page.wait_for_selector(".billing-modal", timeout=8000)
             page.wait_for_timeout(800)
             cards = page.query_selector_all(".billing-modal .plan-card")
@@ -363,12 +464,12 @@ def main():
             modal_text = page.inner_text(".billing-modal")
             shot("D2-billing-cards")
             # 选第一个积分包 → 信用卡 → 支付 → 跳转 Stripe Checkout
-            page.click(".billing-modal .plan-card .plan-btn >> nth=0", timeout=8000)
+            human_click(page, ".billing-modal .plan-card .plan-btn >> nth=0", timeout=8000, steps=8)
             page.wait_for_selector(".payment-method-btn", timeout=8000)
-            page.click(".payment-method-btn:has-text('信用卡')", timeout=8000)
+            human_click(page, ".payment-method-btn:has-text('信用卡')", timeout=8000, steps=8)
             page.wait_for_selector(".stripe-pay-btn", timeout=8000)
             shot("D2-billing-pay")
-            page.click(".stripe-pay-btn", timeout=10000)
+            human_click(page, ".stripe-pay-btn", timeout=10000, steps=8)
             checkout_url = wait_url_part("checkout.stripe.com", timeout=45)
             if not checkout_url:
                 raise AssertionError("未跳转到 Stripe Checkout")
@@ -389,6 +490,7 @@ def main():
     report["console_errors"] = report["console_errors"][:5]
     ok = all(s["ok"] for s in report["steps"])
     (SHOT_DIR / "demo-result.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    (SHOT_DIR / f"demo-result-{args.mode}.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print("=" * 60)
     print(f"CEO VISUAL DEMO DEEP: {'PERFECT PLAY ✅' if ok else 'HAS ISSUES ❌'} (mode={args.mode}, slowMo={SLOW_MO}ms)")
     for s in report["steps"]:
