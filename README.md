@@ -411,6 +411,9 @@ npm run demo:visual
 # 移动端 iPhone 14 模拟
 python scripts/ceo_visual_demo.py --mode mobile
 
+# 快节奏短视频模式（slowMo=150ms · 自动录屏导出 TEMP/calorieai_demo_fast.mp4）
+python scripts/ceo_visual_demo.py --fast
+
 # 本地联调
 python scripts/ceo_visual_demo.py --url http://127.0.0.1:3100
 ```

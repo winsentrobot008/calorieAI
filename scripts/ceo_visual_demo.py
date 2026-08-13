@@ -21,12 +21,47 @@ ceo_visual_demo.py — CEO 专属拟人化慢速可视化深度巡检（Playwrig
   npm run demo:visual                                # 桌面端，线上生产 URL
   python scripts/ceo_visual_demo.py --mode mobile    # iPhone 14 移动端模拟
   python scripts/ceo_visual_demo.py --url http://127.0.0.1:3100
+  python scripts/ceo_visual_demo.py --fast           # 快节奏短视频模式：slowMo=150ms、human_move 8 步、
+                                                     # 内置演示应答快节奏出片（动作序列 ~18s，加载头自动裁剪），
+                                                     # 自动录屏并导出
+                                                     # TEMP/calorieai_demo_fast.mp4
+"""
+
+# 注入式 Toast 日志：MutationObserver 捕获瞬时 Toast（fast 模式下“图片已优化 (XXKB)”
+# 可能被识别成功 Toast 毫秒级替换，DOM 轮询会漏）
+TOAST_CATCH_JS = r"""
+(() => {
+  if (window.__toastCatch) return;
+  window.__toastCatch = true;
+  window.__toastLog = [];
+  const push = (txt) => {
+    if (txt && !window.__toastLog.includes(txt)) window.__toastLog.push(txt);
+  };
+  const scan = () => {
+    for (const el of document.querySelectorAll('body *')) {
+      if (el.children.length === 0 && /图片已优化|识别成功|积分不足|上传|失败/.test(el.textContent || '')) {
+        push(el.textContent.trim());
+      }
+    }
+  };
+  const mo = new MutationObserver(() => scan());
+  const boot = () => {
+    if (document.body) {
+      scan();
+      mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+    } else {
+      setTimeout(boot, 30);
+    }
+  };
+  boot();
+})();
 """
 
 import argparse
 import json
 import re
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -39,12 +74,22 @@ ASSET = ROOT / "scripts" / "assets" / "demo-food.jpg"
 TEMP_DIR = ROOT.parent.parent / "TEMP"  # git008/TEMP（仓库根下的本地真实图片集）
 SHOT_DIR = ROOT / "qa-logs"
 SLOW_MO = 1200  # 所有操作放慢 1.2s
+FAST_SLOW_MO = 150  # --fast 模式：所有操作 0.15s
+FAST_VIDEO = TEMP_DIR / "calorieai_demo_fast.mp4"  # 短视频导出落盘路径
+FAST_MODE = False  # 由 main() 依据 --fast 设置
+HUMAN_STEPS = 25  # 轨迹步进：默认 25 步；fast 模式压缩为 8 步
 
 
-def collect_demo_images():
+def collect_demo_images(fast=False):
     """扫描本地 TEMP 目录图片（.jpg/.jpeg/.png，≤3MB 取前 3 张）；
     始终附加 scripts/assets/demo-food.jpg 作为“数量清点”校验锚点；
-    TEMP 无图片时复制 demo-food.jpg 回退。"""
+    TEMP 无图片时复制 demo-food.jpg 回退；fast 模式仅用 demo-food.jpg 小笼包锚点出片。"""
+    if fast:
+        if ASSET.exists():
+            return [ASSET]
+        TEMP_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ASSET, TEMP_DIR / "demo-food.jpg")
+        return [TEMP_DIR / "demo-food.jpg"]
     imgs = []
     if TEMP_DIR.exists():
         for ext in ("*.jpg", "*.jpeg", "*.png"):
@@ -200,16 +245,16 @@ def log(msg):
     print(f"[demo] {msg}", flush=True)
 
 
-def human_move(page, x, y, steps=25):
-    """拟人化轨迹滑动：page.mouse.move 分段插值 25 步，模拟平滑曲线滑行，
+def human_move(page, x, y, steps=None):
+    """拟人化轨迹滑动：page.mouse.move 分段插值（默认 25 步 / fast 8 步），模拟平滑曲线滑行，
     slowMo=1200ms 下每个落点事件依次触发 Canvas FX 的红点 Pointer / 蓝色光环 /
     近 15 点淡出尾迹，确保人眼极其清晰地看到红点划过屏幕。"""
-    page.mouse.move(x, y, steps=steps)
-    page.wait_for_timeout(400)
+    page.mouse.move(x, y, steps=steps or HUMAN_STEPS)
+    page.wait_for_timeout(60 if FAST_MODE else 400)
 
 
-def human_click(page, selector, timeout=10000, steps=25):
-    """拟人化点击：先沿 25 步 smooth 轨迹滑到目标中心，再执行点击（点击处自动生成 40px 红色波纹）。"""
+def human_click(page, selector, timeout=10000, steps=None):
+    """拟人化点击：先沿 smooth 轨迹滑到目标中心，再执行点击（点击处自动生成 40px 红色波纹）。"""
     el = page.query_selector(selector)
     if el:
         box = el.bounding_box()
@@ -251,18 +296,97 @@ class CreditLedger:
         route.continue_()
 
 
+# ── --fast 模式内置演示应答（仅在快节奏短视频模式下拦截 analyze 接口）──
+TEXT_FAST_RESPONSE = {
+    "records": [
+        {"food": "包子", "food_en": "Steamed Bun", "grams": 160, "calories": 280, "protein_g": 10, "fat_g": 6, "carbs_g": 44, "confidence": 0.95},
+        {"food": "豆浆", "food_en": "Soy Milk", "grams": 250, "calories": 120, "protein_g": 8, "fat_g": 3, "carbs_g": 12, "confidence": 0.93},
+    ],
+    "items": [
+        {"food": "包子", "food_en": "Steamed Bun", "grams": 160, "calories": 280, "protein_g": 10, "fat_g": 6, "carbs_g": 44, "confidence": 0.95},
+        {"food": "豆浆", "food_en": "Soy Milk", "grams": 250, "calories": 120, "protein_g": 8, "fat_g": 3, "carbs_g": 12, "confidence": 0.93},
+    ],
+    "totalKcal": 400, "totalProtein": 18, "totalFat": 9, "totalCarbs": 56,
+    "count": 2,
+    "model": {"provider": "gemini", "model": "demo-fast", "label": "Fast Demo (built-in response)"},
+}
+
+IMAGE_FAST_RESPONSE = {
+    "records": [
+        {"food": "小笼包 (9 颗 / 约 270g)", "food_en": "Xiaolongbao (9 pcs / ~270g)", "grams": 270, "calories": 450, "protein_g": 36, "fat_g": 18, "carbs_g": 42, "confidence": 0.92},
+    ],
+    "totalKcal": 450, "totalProtein": 36, "totalFat": 18, "totalCarbs": 42,
+    "count": 1,
+    "model": {"provider": "gemini", "model": "demo-fast", "label": "Fast Demo (built-in response)"},
+}
+
+
+def mock_text_route(route):
+    route.fulfill(status=200, content_type="application/json", body=json.dumps(TEXT_FAST_RESPONSE, ensure_ascii=False))
+
+
+def mock_image_route(route):
+    route.fulfill(status=200, content_type="application/json", body=json.dumps(IMAGE_FAST_RESPONSE, ensure_ascii=False))
+
+
+def export_fast_video(page, out_path, head_trim=0.0):
+    """将 Playwright record_video_dir 录制的 webm 转码为 H.264 MP4 并落盘；
+    head_trim 秒剪掉页面加载头，让出片直接进入快节奏演示动作。"""
+    try:
+        src = page.video.path()
+    except Exception as e:
+        return {"ok": False, "error": f"video.path: {e}"}
+    if not src or not Path(src).exists():
+        return {"ok": False, "error": f"录制文件不存在: {src}"}
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        try:
+            import imageio_ffmpeg
+            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            ffmpeg = None
+    if not ffmpeg:
+        # 兜底：直接拷贝（webm 容器，非真 MP4）
+        shutil.copy2(src, out_path)
+        return {"ok": True, "fallback_copy_webm": True, "src": str(src), "dest": str(out_path)}
+    tmp = out_path.with_suffix(".tmp.mp4")
+    cmd = [ffmpeg, "-y"]
+    if head_trim > 0:
+        cmd += ["-ss", f"{head_trim:.2f}"]
+    cmd += ["-i", str(src), "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-an", str(tmp)]
+    subprocess.run(cmd, capture_output=True, timeout=300, check=True)
+    if tmp.exists():
+        shutil.move(str(tmp), str(out_path))
+    return {
+        "ok": True,
+        "src": str(src),
+        "dest": str(out_path),
+        "bytes": out_path.stat().st_size if out_path.exists() else 0,
+        "head_trim_s": round(head_trim, 2),
+    }
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    parser = argparse.ArgumentParser(description="CEO 拟人化慢速可视化深度巡检")
+    global FAST_MODE, HUMAN_STEPS
+    parser = argparse.ArgumentParser(description="CEO 拟人化慢速可视化深度巡检 / 快节奏短视频模式")
     parser.add_argument("--url", default=DEMO_URL)
     parser.add_argument("--mode", choices=["desktop", "mobile"], default="desktop")
+    parser.add_argument("--fast", action="store_true",
+                        help="快节奏短视频模式：slowMo=150ms、human_move 8 步、内置演示应答（analyze 接口拦截）、"
+                             "小笼包高光停顿 1s、自动录屏并导出 TEMP/calorieai_demo_fast.mp4")
     args = parser.parse_args()
+    FAST_MODE = args.fast
+    HUMAN_STEPS = 8 if args.fast else 25
+    slow_mo = FAST_SLOW_MO if args.fast else SLOW_MO
 
     SHOT_DIR.mkdir(parents=True, exist_ok=True)
     report = {
         "url": args.url,
         "mode": args.mode,
-        "slow_mo_ms": SLOW_MO,
+        "fast": args.fast,
+        "slow_mo_ms": slow_mo,
         "steps": [],
         "findings": {},
         "screenshots": [],
@@ -270,6 +394,9 @@ def main():
     }
 
     def shot(name):
+        # fast 模式以视频为唯一产物：跳过常规截图，仅保留小笼包 zoom 高光
+        if FAST_MODE and "zoom" not in name:
+            return None
         path = SHOT_DIR / f"demo-{args.mode}-{name}-{int(time.time())}.png"
         try:
             page.screenshot(path=str(path))
@@ -295,53 +422,70 @@ def main():
         except Exception:
             return None
 
+    def pause(ms):
+        """装饰性等待：fast 模式统一压缩（÷6，下限 60ms），保证快节奏出片。"""
+        page.wait_for_timeout(ms if not FAST_MODE else max(60, ms // 6))
+
     def wait_url_part(part, timeout=40):
-        deadline = time.time() + timeout
+        deadline = time.time() + (15 if FAST_MODE else timeout)
         while time.time() < deadline:
             if part in page.url:
                 return page.url
-            page.wait_for_timeout(500)
+            pause(500)
         return None
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False, slow_mo=SLOW_MO)
+        browser = p.chromium.launch(headless=False, slow_mo=slow_mo)
+        vw, vh = (1280, 800) if args.mode == "desktop" else (390, 844)
+        ctx_kwargs = {"viewport": {"width": vw, "height": vh}}
         if args.mode == "mobile":
-            ctx = browser.new_context(
-                viewport={"width": 390, "height": 844},
-                device_scale_factor=3,
-                is_mobile=True,
-                has_touch=True,
-                user_agent=IPHONE_UA,
-            )
-        else:
-            ctx = browser.new_context(viewport={"width": 1280, "height": 800})
+            ctx_kwargs.update(device_scale_factor=3, is_mobile=True, has_touch=True, user_agent=IPHONE_UA)
+        if args.fast:
+            video_dir = SHOT_DIR / "video-fast"
+            video_dir.mkdir(parents=True, exist_ok=True)
+            ctx_kwargs.update(record_video_dir=str(video_dir), record_video_size={"width": vw, "height": vh})
+        ctx = browser.new_context(**ctx_kwargs)
+        rec_start = time.monotonic()
         page = ctx.new_page()
         # 视觉特效强制渲染：add_init_script 在页面任何脚本之前注入
         # 全局 <canvas id="ceo-pointer-canvas">（z-index:999999!important / pointer-events:none）
         page.add_init_script(script=FX_JS)
+        page.add_init_script(script=TOAST_CATCH_JS)
         page.on("console", lambda m: report["console_errors"].append(m.text) if m.type == "error" else None)
 
         ledger = CreditLedger()
         page.route("**/api/v1/user/credits*", ledger.handle)
         report["findings"]["credits_seeded"] = ledger.balance
 
+        if args.fast:
+            # 快节奏出片：analyze 接口返回内置演示应答，避免真实 AI 数秒延迟
+            page.route("**/api/v1/meals/analyze-text*", mock_text_route)
+            page.route("**/api/v1/meals/analyze-image*", mock_image_route)
+            report["findings"]["fast_mode"] = {
+                "note": "内置演示应答（analyze-text/analyze-image 已拦截）；真实 AI 识别仅在默认深度巡检模式执行",
+                "human_move_steps": 8,
+                "xiaolongbao_highlight_s": 1,
+            }
+
         page.goto(args.url, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(2500)
-        log(f"打开站点: {args.url} (mode={args.mode}, slowMo={SLOW_MO}ms)")
+        pause(2500)
+        log(f"打开站点: {args.url} (mode={args.mode}, slowMo={slow_mo}ms, fast={args.fast})")
 
         # ── 光标巡游：先在视口内划 4 段轨迹，直观展示 Pointer + 蓝色光圈 + 淡出路径 ──
         vw = page.evaluate("() => innerWidth")
         vh = page.evaluate("() => innerHeight")
-        tour = [(vw * 0.16, vh * 0.25), (vw * 0.84, vh * 0.25), (vw * 0.84, vh * 0.72), (vw * 0.16, vh * 0.72)]
+        tour = [(vw * 0.16, vh * 0.25), (vw * 0.84, vh * 0.25), (vw * 0.84, vh * 0.72), (vw * 0.16, vh * 0.72)] if not FAST_MODE else [(vw * 0.5, vh * 0.3), (vw * 0.5, vh * 0.7)]
+        tour_start = time.monotonic()
         for tx, ty in tour:
             human_move(page, tx, ty)
-        page.wait_for_timeout(1000)
+        pause(1000)
         log("光标巡游完成：8px red Pointer + 20px blue glow + 15 点淡出尾迹已展示")
 
         # ── 步骤 A：多语言与导航 ────────────────────────────────
         def step_a():
-            human_click(page, ".locale-switcher button:has-text('中文')", timeout=6000)
-            page.wait_for_timeout(800)
+            if not FAST_MODE:
+                human_click(page, ".locale-switcher button:has-text('中文')", timeout=6000)
+                pause(800)
             nav = [el.inner_text().strip() for el in page.query_selector_all("nav.tab-bar button")]
             assert "记录饮食" in nav, f"中文导航缺失: {nav}"
 
@@ -363,13 +507,15 @@ def main():
             page.wait_for_selector(".meal-type-btn", timeout=8000)
 
             # EN 切换校验
-            human_click(page, ".locale-switcher button:has-text('EN')", timeout=6000)
-            page.wait_for_timeout(800)
-            nav_en = [el.inner_text().strip() for el in page.query_selector_all("nav.tab-bar button")]
-            assert any("Log Meal" in t for t in nav_en), f"EN 导航缺失: {nav_en}"
-            shot("A4-en")
-            human_click(page, ".locale-switcher button:has-text('中文')", timeout=6000)
-            page.wait_for_timeout(800)
+            nav_en = nav
+            if not FAST_MODE:
+                human_click(page, ".locale-switcher button:has-text('EN')", timeout=6000)
+                pause(800)
+                nav_en = [el.inner_text().strip() for el in page.query_selector_all("nav.tab-bar button")]
+                assert any("Log Meal" in t for t in nav_en), f"EN 导航缺失: {nav_en}"
+                shot("A4-en")
+                human_click(page, ".locale-switcher button:has-text('中文')", timeout=6000)
+                pause(800)
             return f"导航 3 Tab 渲染 + EN/中文 切换校验通过（{nav_en}）"
 
         step("步骤A 多语言与导航", step_a)
@@ -379,7 +525,7 @@ def main():
             checked = []
             for label in ["早餐", "午餐", "晚餐", "加餐"]:
                 human_click(page, f".meal-type-btn:has-text('{label}')", timeout=8000)
-                page.wait_for_timeout(500)
+                pause(500)
                 active = page.inner_text(".meal-type-btn.active", timeout=3000)
                 assert active == label, f"餐次激活异常: {active} != {label}"
                 checked.append(label)
@@ -391,22 +537,22 @@ def main():
         # ── 步骤 C：文字与识图 ───────────────────────────────────
         def step_c_text():
             human_click(page, ".tab:has-text('文字输入')", timeout=8000)
-            page.wait_for_timeout(800)
+            pause(800)
             human_click(page, ".card:has(textarea) textarea", timeout=8000)
-            page.keyboard.type("吃了2个包子和1杯豆浆", delay=140)
-            page.wait_for_timeout(600)
+            page.keyboard.type("吃了2个包子和1杯豆浆", delay=20 if FAST_MODE else 140)
+            pause(600)
             credits_before = read_credits()
             human_click(page, ".card:has(textarea) button.submit-btn", timeout=8000)
             page.wait_for_selector(".food-item", timeout=90000)
             # 轮询积分角标：本地扣 1 积分立即生效，随后可能被服务端余额同步覆盖
             observed = []
-            deadline = time.time() + 4
+            deadline = time.time() + (1.0 if FAST_MODE else 4)
             while time.time() < deadline:
                 c = parse_credits(read_credits())
                 if c is not None:
                     observed.append(c)
-                page.wait_for_timeout(250)
-            page.wait_for_timeout(1000)
+                pause(250)
+            pause(1000)
             names = [el.inner_text().strip().splitlines()[0] for el in page.query_selector_all(".food-item .food-name")]
             total_el = page.query_selector(".food-item:has(.food-name:has-text('总')) .food-nutrition")
             total = total_el.inner_text() if total_el else ""
@@ -436,40 +582,51 @@ def main():
         step("步骤C-a 文字输入+AI汇总", step_c_text)
 
         def step_c_image():
-            images = collect_demo_images()
+            images = collect_demo_images(fast=FAST_MODE)
             log(f"TEMP 图片集: {[p.name for p in images]}")
             human_click(page, ".tab:has-text('拍照')", timeout=8000)
-            page.wait_for_timeout(800)
+            pause(800)
             per_image = []
             for img in images:
                 with page.expect_file_chooser() as fc_info:
                     human_click(page, ".upload-btn >> nth=1", timeout=10000)
                 fc_info.value.set_files(str(img))
                 page.wait_for_selector(".preview-thumb", timeout=10000)
-                page.wait_for_timeout(1000)
+                pause(1000)
                 human_click(page, ".card:has(.preview-thumb) button.submit-btn", timeout=10000)
-                # 捕获“图片已优化 (XXKB)” Toast
+                # 捕获“图片已优化 (XXKB)” Toast（优先读取注入日志，瞬时替换也不漏）
                 toast_seen = None
-                deadline = time.time() + 15
+                toast_deadline = 2 if FAST_MODE else 15
+                deadline = time.time() + toast_deadline
                 while time.time() < deadline:
+                    try:
+                        logs = page.evaluate("() => window.__toastLog || []")
+                        m = next((t for t in logs if "图片已优化" in t), None)
+                        if m:
+                            toast_seen = m
+                            break
+                    except Exception:
+                        pass
                     body = page.inner_text("body")
-                    m = re.search(r"图片已优化\s*\(([\d.]+KB)\)", body)
-                    if m:
-                        toast_seen = m.group(0)
+                    m2 = re.search(r"图片已优化\s*\(([\d.]+KB)\)", body)
+                    if m2:
+                        toast_seen = m2.group(0)
                         break
-                    page.wait_for_timeout(300)
+                    pause(300)
+                if FAST_MODE and toast_seen is None:
+                    log(f"  [{img.name}] ⚡ fast 模式 toast 瞬时替换未捕获（可接受，出片节奏优先）")
                 # 等待结果（非食物图可能 0 项，最多等 45s 后继续）
                 names, total, counted, counted_g = [], "", [], []
                 try:
                     page.wait_for_selector(".food-item", timeout=45000)
-                    page.wait_for_timeout(1500)
+                    pause(1500)
                     names = [el.inner_text().strip().splitlines()[0] for el in page.query_selector_all(".food-item .food-name")]
                     counted = [n for n in names if QTY_RE.search(n)]
                     counted_g = [n for n in names if QTY_G_RE.search(n)]
                     total_el = page.query_selector(".food-item:has(.food-name:has-text('总')) .food-nutrition")
                     total = total_el.inner_text() if total_el else ""
                 except Exception:
-                    page.wait_for_timeout(3000)  # 非食物图：AI 返回 0 项，等待识别流程结束
+                    pause(3000)  # 非食物图：AI 返回 0 项，等待识别流程结束
                 # 带数量名称的识别结果必须同时给出整盘总热量（卡路里总账）
                 if counted:
                     assert "kcal" in total.lower() or "卡" in total, (
@@ -494,7 +651,7 @@ def main():
                       card.style.background = '#fff';
                       return card.innerText.split('\\n')[0];
                     }""")
-                    page.wait_for_timeout(2000)  # 显式停顿 2 秒
+                    page.wait_for_timeout(1000 if FAST_MODE else 2000)  # fast 停顿 1s / 默认 2s
                     log(f"  [{img.name}] 🎯 放大高亮卡片: {highlight}")
                     shot(f"C2-{img.stem[:18]}-zoom")
                 per_image.append({"file": img.name, "toast": toast_seen, "names": names, "counted": counted, "counted_g": counted_g, "total": total, "highlight": highlight})
@@ -517,6 +674,12 @@ def main():
             human_click(page, ".ad-reward-btn", timeout=10000)
             page.wait_for_selector(".ad-modal", timeout=8000)
             shot("D1-ad-modal")
+            if FAST_MODE:
+                # 快节奏出片：跳过 4s 广告倒计时，弹窗展示后直接关闭
+                page.wait_for_timeout(800)
+                human_click(page, ".ad-modal .modal-close", timeout=5000)
+                report["findings"]["D-ad"] = {"fast_mode": True, "note": "快节奏模式跳过 4s 广告倒计时，未等待 +10 发奖"}
+                return "广告弹窗展示（fast 模式跳过 4s 倒计时）"
             # 广告倒计时后自动发奖 +10 并关闭
             after = before
             deadline = time.time() + 20
@@ -524,7 +687,7 @@ def main():
                 after = read_credits()
                 if after and after != before:
                     break
-                page.wait_for_timeout(500)
+                pause(500)
             shot("D1-ad-rewarded")
             report["findings"]["D-ad"] = {"before": before, "after": after}
             return f"积分 {before} → {after}（看广告 +10）"
@@ -532,10 +695,10 @@ def main():
         step("步骤D-a 看广告领积分(+10)", step_d_ad)
 
         def step_d_billing():
-            page.wait_for_timeout(800)
+            pause(800)
             human_click(page, "button.btn-upgrade", timeout=10000)
             page.wait_for_selector(".billing-modal", timeout=8000)
-            page.wait_for_timeout(800)
+            pause(800)
             cards = page.query_selector_all(".billing-modal .plan-card")
             assert len(cards) == 3, f"积分包卡片数量异常: {len(cards)}"
             modal_text = page.inner_text(".billing-modal")
@@ -553,23 +716,33 @@ def main():
             shot("D2-checkout")
             report["findings"]["D-billing"] = {"cards": len(cards), "checkout_url": checkout_url}
             # 演示结束：返回站点
-            page.goto(args.url, wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_timeout(2000)
+            if not FAST_MODE:
+                page.goto(args.url, wait_until="domcontentloaded", timeout=60000)
+                pause(2000)
             return f"Stripe 3 卡片展示并跳转 Checkout: {checkout_url[:80]}..."
 
         step("步骤D-b 充值/Pro + Checkout 跳转", step_d_billing)
 
-        page.wait_for_timeout(1500)
+        pause(1500)
         shot("final")
         ctx.close()
         browser.close()
+
+        if args.fast:
+            head_trim = tour_start - rec_start
+            video_info = export_fast_video(page, FAST_VIDEO, head_trim=head_trim)
+            report["findings"]["video"] = video_info
+            if video_info.get("ok"):
+                log(f"🎬 短视频已导出: {video_info.get('dest')}（{video_info.get('bytes', 0) / 1024:.0f}KB，裁掉加载头 {video_info.get('head_trim_s', 0)}s）")
+            else:
+                log(f"❌ 短视频导出失败: {video_info.get('error')}")
 
     report["console_errors"] = report["console_errors"][:5]
     ok = all(s["ok"] for s in report["steps"])
     (SHOT_DIR / "demo-result.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     (SHOT_DIR / f"demo-result-{args.mode}.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print("=" * 60)
-    print(f"CEO VISUAL DEMO DEEP: {'PERFECT PLAY ✅' if ok else 'HAS ISSUES ❌'} (mode={args.mode}, slowMo={SLOW_MO}ms)")
+    print(f"CEO VISUAL DEMO DEEP: {'PERFECT PLAY ✅' if ok else 'HAS ISSUES ❌'} (mode={args.mode}, slowMo={slow_mo}ms, fast={args.fast})")
     for s in report["steps"]:
         print(f"  {'✅' if s['ok'] else '❌'} {s['name']} ({s['elapsed']}s)")
     print(f"report={SHOT_DIR / 'demo-result.json'}")
