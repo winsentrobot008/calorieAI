@@ -2,18 +2,19 @@
 """
 ceo_visual_demo.py — CEO 专属拟人化慢速可视化深度巡检（Playwright Visual Demo）
 
-视觉特效（Canvas 注入，页面最外层渲染；隐藏原生光标，红点 Pointer 跟手）：
-  - 高亮红色 Pointer + 蓝色半透明追随光环（平滑滞后，人眼可见移动轨迹）；
-  - smooth_move 轨迹动画：page.mouse.move 分段插值（steps），光标划过屏幕留下 1.4s 淡出路径；
-  - human_click 拟人化点击：先沿 smooth 轨迹滑到目标中心，再触发点击；
-  - 点击涟漪：mouse/pointer/touch 触发点生成 40px 红色扩散波纹。
+视觉特效（page.add_init_script 向页面根节点注入全局 <canvas id="ceo-pointer-canvas">）：
+  - 隐藏原生光标；高亮红色 Pointer（8px 实心 + 白描边）+ 蓝色追随光环（20px，平滑滞后）；
+  - human_move 轨迹动画：page.mouse.move 分段插值 25 步，光标划过屏幕留下近 15 点淡出尾迹；
+  - human_click 拟人化点击：先沿 25 步轨迹滑到目标中心，再触发点击；
+  - 点击涟漪：window mousedown 触发点生成 40px 红色扩散波纹（300ms 渐隐动画）。
 
 全 UI / 逻辑深度巡检路径（对齐 PROJECT_SPEC 所有分支）：
   步骤 A  多语言与导航：中文/EN 切换 + 依次点击【记录饮食】【数据看板】【个人设置】校验渲染
   步骤 B  餐次全覆盖：早餐 / 午餐 / 晚餐 / 加餐 依次慢速点击
   步骤 C  文字与识图：逐字输入「吃了2个包子和1杯豆浆」→ AI 汇总 + 积分 -1；
           扫描 TEMP 目录真实图片（无则回退 demo-food.jpg）逐张上传 → 捕获“图片已优化 (XXKB)”
-          并硬校验【小笼包 (X颗 / 约XXg)】数量+约重名称 与 整盘总热量（kcal 总计行）
+          并硬校验【小笼包 (X颗 / 约XXg)】数量+约重名称 与 整盘总热量（kcal 总计行）；
+          命中后显式停顿 2 秒，放大并高亮展示“小笼包 (X 颗)”识别结果卡片
   步骤 D  商业与广告：看广告领积分（+10）；充值/Pro → Stripe 3 套卡片 → 模拟购买跳转 Checkout
 
 用法：
@@ -63,78 +64,130 @@ IPHONE_UA = (
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
 )
 
-# ── Canvas 视觉特效注入：红色光标 + 蓝色追随光圈 + 轨迹 + 40px 点击波纹 ──
+# ── Canvas 视觉特效强制渲染：add_init_script 注入 #ceo-pointer-canvas ──
+# 红点 Pointer(8px) + 蓝色追随光环(20px) + 近 15 点淡出尾迹 + 40px/300ms 点击波纹
 FX_JS = r"""
 (() => {
-  if (window.__ceoFX) return;
-  const cv = document.createElement('canvas');
-  cv.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:999999;';
-  const ctx = cv.getContext('2d');
-  document.body.appendChild(cv);
-  const resize = () => { cv.width = innerWidth; cv.height = innerHeight; };
-  resize(); addEventListener('resize', resize);
+  if (window.__ceoPointerFX) return;
+  window.__ceoPointerFX = true;
 
-  const pts = [];          // 移动轨迹点
-  let mx = -100, my = -100, tx = -100, ty = -100, rx = -100, ry = -100;
-  const ripples = [];
+  // add_init_script 在文档根建立前执行：延迟 boot，直到 body 可用再注入
+  const build = () => {
+    if (window.__ceoPointerBooted) return true;
+    if (!document.documentElement || !document.body) return false;
+    window.__ceoPointerBooted = true;
 
-  const push = (x, y) => {
-    mx = x; my = y; tx = x; ty = y;
-    pts.push({ x, y, t: performance.now() });
-  };
-  document.addEventListener('mousemove', (e) => push(e.clientX, e.clientY), { passive: true });
-  document.addEventListener('touchmove', (e) => { const t = e.touches[0]; if (t) push(t.clientX, t.clientY); }, { passive: true });
-  document.addEventListener('pointerdown', (e) => ripples.push({ x: e.clientX, y: e.clientY, t: performance.now() }), { passive: true });
-  document.addEventListener('touchstart', (e) => { const t = e.touches[0]; if (t) ripples.push({ x: t.clientX, y: t.clientY, t: performance.now() }); }, { passive: true });
+    // 隐藏原生光标（全局样式，对后续动态元素同样生效）
+    const st = document.createElement('style');
+    st.textContent = 'html, body, body * { cursor: none !important; }';
+    (document.head || document.documentElement).appendChild(st);
 
-  const frame = (now) => {
-    ctx.clearRect(0, 0, cv.width, cv.height);
+    const cv = document.createElement('canvas');
+    cv.id = 'ceo-pointer-canvas';
+    cv.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:999999!important;';
+    const ctx = cv.getContext('2d');
+    const mount = () => (document.body || document.documentElement).appendChild(cv);
+    mount();
 
-    // smooth_move 轨迹：最近 24 点连线，随时间淡出
-    const cut = now - 1400;
-    while (pts.length && pts[0].t < cut) pts.shift();
-    if (pts.length > 1) {
-      ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-      for (let i = 1; i < pts.length; i++) {
-        const age = (now - pts[i].t) / 1400;
-        ctx.strokeStyle = `rgba(255,80,80,${0.55 * (1 - age)})`;
-        ctx.beginPath();
-        ctx.moveTo(pts[i - 1].x, pts[i - 1].y);
-        ctx.lineTo(pts[i].x, pts[i].y);
-        ctx.stroke();
+    // 强制持久化：React/Next 重绘或卸载子节点都无法移除画布
+    if (window.MutationObserver) {
+      new MutationObserver(() => { if (!cv.isConnected) mount(); })
+        .observe(document.documentElement, { childList: true, subtree: true });
+    }
+
+    // 高分屏（移动端 dpr=3）保持清晰
+    const resize = () => {
+      const dpr = window.devicePixelRatio || 1;
+      cv.width = Math.max(1, Math.floor(innerWidth * dpr));
+      cv.height = Math.max(1, Math.floor(innerHeight * dpr));
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    resize();
+    addEventListener('resize', resize);
+
+    const MAX_TRAIL = 15;    // 保留近 15 个历史坐标点
+    const pts = [];          // 移动轨迹点
+    let mx = -100, my = -100, tx = -100, ty = -100, rx = -100, ry = -100;
+    const ripples = [];
+
+    const push = (x, y) => {
+      mx = x; my = y; tx = x; ty = y;
+      pts.push({ x, y, t: performance.now() });
+      if (pts.length > MAX_TRAIL) pts.shift();
+    };
+    const onMove = (e) => push(e.clientX, e.clientY);
+    const onDown = (e) => ripples.push({ x: e.clientX, y: e.clientY, t: performance.now() });
+
+    window.addEventListener('mousemove', onMove, { passive: true });
+    window.addEventListener('mousedown', onDown, { passive: true });
+    // 移动端触屏兜底（mobile 模式仍可见轨迹与波纹）
+    window.addEventListener('touchmove', (e) => { const t = e.touches[0]; if (t) onMove(t); }, { passive: true });
+    window.addEventListener('touchstart', (e) => { const t = e.touches[0]; if (t) onDown(t); }, { passive: true });
+
+    const frame = (now) => {
+      ctx.clearRect(0, 0, cv.width, cv.height);
+
+      // 尾迹 Trail：近 15 点连线 + 端点小点，700ms 渐隐
+      const cut = now - 700;
+      while (pts.length && pts[0].t < cut) pts.shift();
+      if (pts.length > 1) {
+        ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        for (let i = 1; i < pts.length; i++) {
+          const age = (now - pts[i].t) / 700;
+          ctx.strokeStyle = `rgba(255,80,80,${Math.max(0, 0.65 * (1 - age))})`;
+          ctx.beginPath();
+          ctx.moveTo(pts[i - 1].x, pts[i - 1].y);
+          ctx.lineTo(pts[i].x, pts[i].y);
+          ctx.stroke();
+        }
+        for (const pt of pts) {
+          const age = (now - pt.t) / 700;
+          ctx.beginPath(); ctx.arc(pt.x, pt.y, 2, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(255,120,120,${Math.max(0, 0.7 * (1 - age))})`;
+          ctx.fill();
+        }
       }
-    }
 
-    // 蓝色追随光圈（平滑滞后 → 人眼可见光标划过路径）
-    rx += (tx - rx) * 0.18;
-    ry += (ty - ry) * 0.18;
-    if (rx > -50) {
-      ctx.beginPath(); ctx.arc(rx, ry, 18, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(96,165,250,0.95)'; ctx.lineWidth = 2.5; ctx.stroke();
-    }
+      // 蓝色追随光环（20px，平滑滞后 → 人眼可见光标划过路径）
+      rx += (tx - rx) * 0.2;
+      ry += (ty - ry) * 0.2;
+      if (rx > -50) {
+        ctx.beginPath(); ctx.arc(rx, ry, 20, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(96,165,250,0.9)'; ctx.lineWidth = 3; ctx.stroke();
+        ctx.beginPath(); ctx.arc(rx, ry, 13, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(96,165,250,0.35)'; ctx.lineWidth = 6; ctx.stroke();
+      }
 
-    // 高亮红色光标点
-    if (mx > -50) {
-      ctx.beginPath(); ctx.arc(mx, my, 6, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,60,60,0.95)'; ctx.fill();
-      ctx.beginPath(); ctx.arc(mx, my, 10, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(255,60,60,0.45)'; ctx.lineWidth = 2; ctx.stroke();
-    }
+      // 高亮红色 Pointer（8px 实心 + 白描边增强对比）
+      if (mx > -50) {
+        ctx.beginPath(); ctx.arc(mx, my, 8, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,45,45,1)'; ctx.fill();
+        ctx.beginPath(); ctx.arc(mx, my, 8, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 2; ctx.stroke();
+      }
 
-    // 点击涟漪：40px 红色扩散波纹
-    for (const r of [...ripples]) {
-      const p = (now - r.t) / 550;
-      if (p >= 1) { ripples.splice(ripples.indexOf(r), 1); continue; }
-      ctx.beginPath(); ctx.arc(r.x, r.y, 6 + p * 34, 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(255,60,60,${0.9 * (1 - p)})`;
-      ctx.lineWidth = 4; ctx.stroke();
-      ctx.beginPath(); ctx.arc(r.x, r.y, 4 + p * 16, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(255,60,60,${0.35 * (1 - p)})`; ctx.fill();
-    }
+      // 点击波纹 Ripple：6px → 40px 红圈扩散，300ms 渐隐
+      for (const r of [...ripples]) {
+        const p = (now - r.t) / 300;
+        if (p >= 1) { ripples.splice(ripples.indexOf(r), 1); continue; }
+        const radius = 6 + p * 34;
+        const alpha = 1 - p;
+        ctx.beginPath(); ctx.arc(r.x, r.y, radius, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255,45,45,${alpha})`;
+        ctx.lineWidth = 4; ctx.stroke();
+        ctx.beginPath(); ctx.arc(r.x, r.y, 3 + p * 12, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255,45,45,${0.4 * alpha})`; ctx.fill();
+      }
+      requestAnimationFrame(frame);
+    };
     requestAnimationFrame(frame);
+    return true;
   };
-  requestAnimationFrame(frame);
-  window.__ceoFX = true;
+
+  if (build()) return;
+  // 文档根尚未建立：轮询 + DOMContentLoaded 双保险，直到 body 可用
+  const iv = setInterval(() => { if (build()) clearInterval(iv); }, 20);
+  document.addEventListener('DOMContentLoaded', () => { if (build()) clearInterval(iv); });
 })();
 """
 
@@ -147,20 +200,21 @@ def log(msg):
     print(f"[demo] {msg}", flush=True)
 
 
-def smooth_move(page, x, y, steps=14):
-    """拟人化轨迹滑动：分段插值 page.mouse.move，slowMo=1200ms 下每个落点事件
-    依次触发 Canvas FX 的红点 Pointer / 蓝色光圈 / 淡出路径，人眼清晰捕获移动路线。"""
+def human_move(page, x, y, steps=25):
+    """拟人化轨迹滑动：page.mouse.move 分段插值 25 步，模拟平滑曲线滑行，
+    slowMo=1200ms 下每个落点事件依次触发 Canvas FX 的红点 Pointer / 蓝色光环 /
+    近 15 点淡出尾迹，确保人眼极其清晰地看到红点划过屏幕。"""
     page.mouse.move(x, y, steps=steps)
     page.wait_for_timeout(400)
 
 
-def human_click(page, selector, timeout=10000, steps=12):
-    """拟人化点击：先沿 smooth 轨迹滑到目标中心，再执行点击（点击处自动生成 40px 红色波纹）。"""
+def human_click(page, selector, timeout=10000, steps=25):
+    """拟人化点击：先沿 25 步 smooth 轨迹滑到目标中心，再执行点击（点击处自动生成 40px 红色波纹）。"""
     el = page.query_selector(selector)
     if el:
         box = el.bounding_box()
         if box and box["width"] > 0 and box["height"] > 0:
-            smooth_move(page, box["x"] + box["width"] / 2, box["y"] + box["height"] / 2, steps=steps)
+            human_move(page, box["x"] + box["width"] / 2, box["y"] + box["height"] / 2, steps=steps)
     page.click(selector, timeout=timeout)
 
 
@@ -262,8 +316,9 @@ def main():
         else:
             ctx = browser.new_context(viewport={"width": 1280, "height": 800})
         page = ctx.new_page()
-        page.add_script_tag(content=FX_JS)
-        page.add_style_tag(content="html, body, body * { cursor: none !important; }")
+        # 视觉特效强制渲染：add_init_script 在页面任何脚本之前注入
+        # 全局 <canvas id="ceo-pointer-canvas">（z-index:999999!important / pointer-events:none）
+        page.add_init_script(script=FX_JS)
         page.on("console", lambda m: report["console_errors"].append(m.text) if m.type == "error" else None)
 
         ledger = CreditLedger()
@@ -279,41 +334,41 @@ def main():
         vh = page.evaluate("() => innerHeight")
         tour = [(vw * 0.16, vh * 0.25), (vw * 0.84, vh * 0.25), (vw * 0.84, vh * 0.72), (vw * 0.16, vh * 0.72)]
         for tx, ty in tour:
-            smooth_move(page, tx, ty, steps=18)
+            human_move(page, tx, ty)
         page.wait_for_timeout(1000)
-        log("光标巡游完成：red Pointer + blue glow + 淡出轨迹已展示")
+        log("光标巡游完成：8px red Pointer + 20px blue glow + 15 点淡出尾迹已展示")
 
         # ── 步骤 A：多语言与导航 ────────────────────────────────
         def step_a():
-            human_click(page, ".locale-switcher button:has-text('中文')", timeout=6000, steps=10)
+            human_click(page, ".locale-switcher button:has-text('中文')", timeout=6000)
             page.wait_for_timeout(800)
             nav = [el.inner_text().strip() for el in page.query_selector_all("nav.tab-bar button")]
             assert "记录饮食" in nav, f"中文导航缺失: {nav}"
 
-            human_click(page, "nav.tab-bar button:has-text('记录饮食')", timeout=8000, steps=10)
+            human_click(page, "nav.tab-bar button:has-text('记录饮食')", timeout=8000)
             page.wait_for_selector(".meal-type-btn", timeout=8000)
             assert page.query_selector(".meal-type-row") is not None
             shot("A1-record")
 
-            human_click(page, "nav.tab-bar button:has-text('数据看板')", timeout=8000, steps=10)
+            human_click(page, "nav.tab-bar button:has-text('数据看板')", timeout=8000)
             page.wait_for_selector(".cal-ring-container", timeout=8000)
             shot("A2-dashboard")
 
-            human_click(page, "nav.tab-bar button:has-text('个人设置')", timeout=8000, steps=10)
+            human_click(page, "nav.tab-bar button:has-text('个人设置')", timeout=8000)
             page.wait_for_timeout(1200)
             assert len(page.query_selector_all("main input, main select")) > 0
             shot("A3-profile")
 
-            human_click(page, "nav.tab-bar button:has-text('记录饮食')", timeout=8000, steps=10)
+            human_click(page, "nav.tab-bar button:has-text('记录饮食')", timeout=8000)
             page.wait_for_selector(".meal-type-btn", timeout=8000)
 
             # EN 切换校验
-            human_click(page, ".locale-switcher button:has-text('EN')", timeout=6000, steps=10)
+            human_click(page, ".locale-switcher button:has-text('EN')", timeout=6000)
             page.wait_for_timeout(800)
             nav_en = [el.inner_text().strip() for el in page.query_selector_all("nav.tab-bar button")]
             assert any("Log Meal" in t for t in nav_en), f"EN 导航缺失: {nav_en}"
             shot("A4-en")
-            human_click(page, ".locale-switcher button:has-text('中文')", timeout=6000, steps=10)
+            human_click(page, ".locale-switcher button:has-text('中文')", timeout=6000)
             page.wait_for_timeout(800)
             return f"导航 3 Tab 渲染 + EN/中文 切换校验通过（{nav_en}）"
 
@@ -323,7 +378,7 @@ def main():
         def step_b():
             checked = []
             for label in ["早餐", "午餐", "晚餐", "加餐"]:
-                human_click(page, f".meal-type-btn:has-text('{label}')", timeout=8000, steps=8)
+                human_click(page, f".meal-type-btn:has-text('{label}')", timeout=8000)
                 page.wait_for_timeout(500)
                 active = page.inner_text(".meal-type-btn.active", timeout=3000)
                 assert active == label, f"餐次激活异常: {active} != {label}"
@@ -335,13 +390,13 @@ def main():
 
         # ── 步骤 C：文字与识图 ───────────────────────────────────
         def step_c_text():
-            human_click(page, ".tab:has-text('文字输入')", timeout=8000, steps=10)
+            human_click(page, ".tab:has-text('文字输入')", timeout=8000)
             page.wait_for_timeout(800)
-            human_click(page, ".card:has(textarea) textarea", timeout=8000, steps=8)
+            human_click(page, ".card:has(textarea) textarea", timeout=8000)
             page.keyboard.type("吃了2个包子和1杯豆浆", delay=140)
             page.wait_for_timeout(600)
             credits_before = read_credits()
-            human_click(page, ".card:has(textarea) button.submit-btn", timeout=8000, steps=8)
+            human_click(page, ".card:has(textarea) button.submit-btn", timeout=8000)
             page.wait_for_selector(".food-item", timeout=90000)
             # 轮询积分角标：本地扣 1 积分立即生效，随后可能被服务端余额同步覆盖
             observed = []
@@ -383,16 +438,16 @@ def main():
         def step_c_image():
             images = collect_demo_images()
             log(f"TEMP 图片集: {[p.name for p in images]}")
-            human_click(page, ".tab:has-text('拍照')", timeout=8000, steps=10)
+            human_click(page, ".tab:has-text('拍照')", timeout=8000)
             page.wait_for_timeout(800)
             per_image = []
             for img in images:
                 with page.expect_file_chooser() as fc_info:
-                    human_click(page, ".upload-btn >> nth=1", timeout=10000, steps=8)
+                    human_click(page, ".upload-btn >> nth=1", timeout=10000)
                 fc_info.value.set_files(str(img))
                 page.wait_for_selector(".preview-thumb", timeout=10000)
                 page.wait_for_timeout(1000)
-                human_click(page, ".card:has(.preview-thumb) button.submit-btn", timeout=10000, steps=8)
+                human_click(page, ".card:has(.preview-thumb) button.submit-btn", timeout=10000)
                 # 捕获“图片已优化 (XXKB)” Toast
                 toast_seen = None
                 deadline = time.time() + 15
@@ -420,7 +475,29 @@ def main():
                     assert "kcal" in total.lower() or "卡" in total, (
                         f"{img.name} 数量名称 {counted} 但整盘总热量缺失: {total!r}"
                     )
-                per_image.append({"file": img.name, "toast": toast_seen, "names": names, "counted": counted, "counted_g": counted_g, "total": total})
+                # 小笼包命中：显式停顿 2 秒，放大并高亮“小笼包 (X 颗)”识别结果卡片
+                highlight = None
+                if counted_g:
+                    highlight = page.evaluate("""() => {
+                      const cards = Array.from(document.querySelectorAll('.food-item'));
+                      const card = cards.find(el => /小笼包/.test(el.innerText))
+                        || cards.find(el => /颗/.test(el.innerText));
+                      if (!card) return null;
+                      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      card.style.transition = 'transform .35s ease, box-shadow .35s ease, outline .35s ease';
+                      card.style.transform = 'scale(1.08)';
+                      card.style.outline = '4px solid #ff3c3c';
+                      card.style.boxShadow = '0 0 0 4px #ff3c3c, 0 0 26px rgba(255,60,60,.85)';
+                      card.style.borderRadius = '12px';
+                      card.style.position = 'relative';
+                      card.style.zIndex = '50';
+                      card.style.background = '#fff';
+                      return card.innerText.split('\\n')[0];
+                    }""")
+                    page.wait_for_timeout(2000)  # 显式停顿 2 秒
+                    log(f"  [{img.name}] 🎯 放大高亮卡片: {highlight}")
+                    shot(f"C2-{img.stem[:18]}-zoom")
+                per_image.append({"file": img.name, "toast": toast_seen, "names": names, "counted": counted, "counted_g": counted_g, "total": total, "highlight": highlight})
                 log(f"  [{img.name}] toast={toast_seen} names={names} counted={counted} counted_g={counted_g} total={total}")
                 shot(f"C2-{img.stem[:18]}")
             report["findings"]["C-image"] = per_image
@@ -437,7 +514,7 @@ def main():
         # ── 步骤 D：商业与广告 ───────────────────────────────────
         def step_d_ad():
             before = read_credits()
-            human_click(page, ".ad-reward-btn", timeout=10000, steps=10)
+            human_click(page, ".ad-reward-btn", timeout=10000)
             page.wait_for_selector(".ad-modal", timeout=8000)
             shot("D1-ad-modal")
             # 广告倒计时后自动发奖 +10 并关闭
@@ -456,7 +533,7 @@ def main():
 
         def step_d_billing():
             page.wait_for_timeout(800)
-            human_click(page, "button.btn-upgrade", timeout=10000, steps=10)
+            human_click(page, "button.btn-upgrade", timeout=10000)
             page.wait_for_selector(".billing-modal", timeout=8000)
             page.wait_for_timeout(800)
             cards = page.query_selector_all(".billing-modal .plan-card")
@@ -464,12 +541,12 @@ def main():
             modal_text = page.inner_text(".billing-modal")
             shot("D2-billing-cards")
             # 选第一个积分包 → 信用卡 → 支付 → 跳转 Stripe Checkout
-            human_click(page, ".billing-modal .plan-card .plan-btn >> nth=0", timeout=8000, steps=8)
+            human_click(page, ".billing-modal .plan-card .plan-btn >> nth=0", timeout=8000)
             page.wait_for_selector(".payment-method-btn", timeout=8000)
-            human_click(page, ".payment-method-btn:has-text('信用卡')", timeout=8000, steps=8)
+            human_click(page, ".payment-method-btn:has-text('信用卡')", timeout=8000)
             page.wait_for_selector(".stripe-pay-btn", timeout=8000)
             shot("D2-billing-pay")
-            human_click(page, ".stripe-pay-btn", timeout=10000, steps=8)
+            human_click(page, ".stripe-pay-btn", timeout=10000)
             checkout_url = wait_url_part("checkout.stripe.com", timeout=45)
             if not checkout_url:
                 raise AssertionError("未跳转到 Stripe Checkout")
