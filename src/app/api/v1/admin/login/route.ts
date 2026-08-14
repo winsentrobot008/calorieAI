@@ -5,8 +5,12 @@ import { createAdminSession } from "@/lib/admin-session";
  * 特权管理员账号（准上线配置）:
  *   - winsentrobot@gmail.com / 0833  → CEO 特权管理员
  *   - admin / admin123               → 兼容保留账号
+ *
+ * 可选环境变量扩展（不配置则仅使用内置账号）:
+ *   - ADMIN_USERNAME / ADMIN_EMAIL：管理员登录名（可逗号分隔多个）
+ *   - ADMIN_PASSWORD：对应密码（按顺序一一对应）
  */
-const ADMIN_ACCOUNTS = [
+const BUILTIN_ADMIN_ACCOUNTS = [
   {
     username: "winsentrobot@gmail.com",
     password: "0833",
@@ -22,6 +26,28 @@ const ADMIN_ACCOUNTS = [
     display_name: "admin",
   },
 ];
+
+function envAdminAccounts() {
+  const usernames = (process.env.ADMIN_USERNAME || process.env.ADMIN_EMAIL || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const passwords = (process.env.ADMIN_PASSWORD || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return usernames
+    .map((username, i) => ({
+      username,
+      password: passwords[i] || "",
+      admin_id: `admin_env_${i + 1}`,
+      role: "superadmin" as const,
+      display_name: username.split("@")[0] || "admin",
+    }))
+    .filter((a) => a.password);
+}
+
+const ADMIN_ACCOUNTS = [...BUILTIN_ADMIN_ACCOUNTS, ...envAdminAccounts()];
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}));
