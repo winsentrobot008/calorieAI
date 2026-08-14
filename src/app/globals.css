@@ -358,6 +358,9 @@ body {
 .billing-modal { max-width: 560px; }
 .billing-status-bar { margin-bottom: 16px; }
 .billing-message { background: #1e293b; border: 1px solid #475569; border-radius: 8px; padding: 10px 14px; font-size: 13px; margin-bottom: 12px; text-align: center; }
+.billing-message.error { background: #2a1216; border-color: #ef4444aa; color: #fca5a5; }
+.billing-message.warn { background: #2a2110; border-color: #f59e0baa; color: #fcd34d; }
+.billing-message.success { background: #0e2a1c; border-color: #34d399aa; color: #6ee7b7; }
 .billing-footer { margin-top: 20px; text-align: center; }
 .billing-footer p { font-size: 11px; color: #475569; }
 .badge-free { background: #1e293b; color: #94a3b8; border: 1px solid #475569; }

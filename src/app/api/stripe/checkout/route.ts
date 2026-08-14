@@ -4,6 +4,84 @@ import { getCreditPack, resolvePack, type CreditPack } from "@/lib/credit-packs"
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
 
+/** 判断 Stripe 密钥是否为占位值 / 未配置 */
+function isPlaceholder(value: string | undefined): boolean {
+  return (
+    !value ||
+    value === "YOUR_STRIPE_SECRET_KEY_HERE" ||
+    value === "YOUR_STRIPE_PUBLISHABLE_KEY_HERE" ||
+    value.startsWith("sk_test_placeholder") ||
+    value.startsWith("pk_test_placeholder") ||
+    /^sk_(test|live)_(x{8,}|replace)/i.test(value) ||
+    /^pk_(test|live)_(x{8,}|replace)/i.test(value)
+  );
+}
+
+/**
+ * 将 Stripe SDK / API 错误翻译成前端可读的中文原因，
+ * 同时保留原始 detail 供日志与高级排障。
+ */
+function describeStripeError(err: any): {
+  error: string;
+  detail: string;
+  code: string;
+} {
+  const raw = err?.message || String(err || "Unknown error");
+  const code = err?.code || "";
+  const type = err?.type || "";
+  const param = err?.param || "";
+  const detail = [
+    `[Stripe] type=${type || "unknown"}`,
+    code ? `code=${code}` : "",
+    param ? `param=${param}` : "",
+    `message=${raw}`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  // 密钥缺失 / 无效
+  if (
+    code === "api_key_missing" ||
+    /api key|secret key|publishable key|sk_live|sk_test|pk_live|pk_test/i.test(raw)
+  ) {
+    return {
+      error: "Stripe API Key 未配置或无效，请检查 STRIPE_SECRET_KEY / NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY",
+      detail,
+      code: code || "api_key_invalid",
+    };
+  }
+
+  // 价格/商品参数无效
+  if (
+    code === "resource_missing" ||
+    /no such price|invalid price|price.*(missing|invalid|not found)|parameter_invalid/i.test(raw)
+  ) {
+    return {
+      error: "Stripe Price ID 无效或商品价格参数有误，请检查积分包价格配置",
+      detail,
+      code: code || "invalid_price_id",
+    };
+  }
+
+  // 支付方式未开通（自动降级失败时的最终兜底）
+  if (
+    /must activate|not activated|isn't activated|not enabled|not supported|cannot be used|no such payment method/i.test(raw)
+  ) {
+    return {
+      error: "该支付方式在 Stripe 账户中未开通，请改用信用卡支付或在 Stripe Dashboard 激活",
+      detail,
+      code: code || "payment_method_not_enabled",
+    };
+  }
+
+  // 其余 Stripe 错误 → 原样透出便于定位
+  return {
+    error: raw,
+    detail,
+    code: code || "stripe_error",
+  };
+}
+
 /**
  * POST /api/stripe/checkout
  *
@@ -28,11 +106,8 @@ const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
 export async function POST(request: NextRequest) {
   try {
     // ── 验证 Stripe 是否已配置 ──────────────────────────
-    const secretValid =
-      !!STRIPE_SECRET_KEY && STRIPE_SECRET_KEY !== "YOUR_STRIPE_SECRET_KEY_HERE";
-    const publishableValid =
-      !!STRIPE_PUBLISHABLE_KEY &&
-      STRIPE_PUBLISHABLE_KEY !== "YOUR_STRIPE_PUBLISHABLE_KEY_HERE";
+    const secretValid = !isPlaceholder(STRIPE_SECRET_KEY);
+    const publishableValid = !isPlaceholder(STRIPE_PUBLISHABLE_KEY);
     if (!secretValid || !publishableValid) {
       const body = await request.json().catch(() => ({}));
       const pack: CreditPack | undefined = body.pack_id
@@ -41,20 +116,37 @@ export async function POST(request: NextRequest) {
       if (!pack) {
         return NextResponse.json({ error: `未知积分包: ${body.pack_id}` }, { status: 400 });
       }
+      const reason = !STRIPE_SECRET_KEY
+        ? "missing_secret_key"
+        : !secretValid
+          ? "invalid_secret_key"
+          : !STRIPE_PUBLISHABLE_KEY
+            ? "missing_publishable_key"
+            : "invalid_publishable_key";
+      const detail = !STRIPE_SECRET_KEY
+        ? "未配置 Stripe Secret Key（STRIPE_SECRET_KEY 为空）"
+        : !secretValid
+          ? "Stripe Secret Key 为占位值/无效（STRIPE_SECRET_KEY 未替换为 sk_live_*/sk_test_*）"
+          : !STRIPE_PUBLISHABLE_KEY
+            ? "未配置 Stripe Publishable Key（NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY 为空）"
+            : "Stripe Publishable Key 为占位值/无效（NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY 未替换为 pk_live_*/pk_test_*）";
       return NextResponse.json({
         sessionId: `cs_mock_${Date.now()}`,
         url: `/billing/success?pack_id=${pack.id}&mock=true`,
         mock: true,
+        reason,
+        detail,
         pack_id: pack.id,
         credits: pack.credits,
         amount: pack.priceUsd,
         message:
-          "演示模式：未配置完整的 Stripe 密钥（STRIPE_SECRET_KEY / NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY）。设置后启用真实支付。",
+          `演示模式：${detail}。设置真实密钥后自动启用 Stripe 托管支付页。`,
       });
     }
 
     const Stripe = (await import("stripe")).default;
-    const stripe = new Stripe(STRIPE_SECRET_KEY, {
+    // 上方已校验 STRIPE_SECRET_KEY 非空且非占位，此处显式断言
+    const stripe = new Stripe(STRIPE_SECRET_KEY as string, {
       apiVersion: "2026-06-24.dahlia",
     });
 
@@ -65,7 +157,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `未知积分包: ${pack_id}` }, { status: 400 });
     }
 
-    const origin = request.headers.get("origin") || "http://localhost:3000";
+    const origin =
+      request.headers.get("origin") ||
+      request.nextUrl.origin ||
+      process.env.NEXT_PUBLIC_APP_URL ||
+      "http://localhost:3000";
     const amountCents = Math.round(pack.priceUsd * 100);
     const productLabel = `${pack.credits} 积分包`;
 
@@ -132,7 +228,7 @@ export async function POST(request: NextRequest) {
         return { session: s, fallback: false };
       } catch (err: any) {
         const msg = err?.message || String(err);
-        const unsupported = /invalid|not activated|cannot be used|not supported|does not support|no such payment method|requires\s*`?payment_method_options/i.test(msg);
+        const unsupported = /invalid|not activated|must activate|isn't activated|not enabled|cannot be used|not supported|does not support|no such payment method|requires\s*`?payment_method_options/i.test(msg);
         if (unsupported && !(methods.length === 1 && methods[0] === "card")) {
           const s = await stripe.checkout.sessions.create({ ...sessionParams, payment_method_types: FALLBACK_CARD_ONLY });
           return { session: s, fallback: true };
@@ -142,6 +238,10 @@ export async function POST(request: NextRequest) {
     };
 
     const { session, fallback } = await tryCreate(paymentMethodTypes);
+
+    if (!session?.url) {
+      throw new Error("Stripe Checkout Session 创建成功但未返回支付跳转 URL");
+    }
 
     return NextResponse.json({
       sessionId: session.id,
@@ -153,9 +253,14 @@ export async function POST(request: NextRequest) {
       fallback,
     });
   } catch (error: any) {
-    console.error("[Stripe Checkout Error]", error);
+    const { error: friendly, detail, code } = describeStripeError(error);
+    console.error("[Stripe Checkout Error]", {
+      code,
+      detail,
+      stack: error?.stack || undefined,
+    });
     return NextResponse.json(
-      { error: error.message || "创建支付会话失败" },
+      { error: friendly || "创建支付会话失败", detail, code },
       { status: 500 },
     );
   }

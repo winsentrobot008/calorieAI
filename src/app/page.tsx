@@ -654,6 +654,7 @@ function BillingModal({
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodType | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [messageType, setMessageType] = useState<"info" | "success" | "warn" | "error">("info");
   const [paypalKey, setPaypalKey] = useState(0);
 
   const paypalClientId =
@@ -678,6 +679,7 @@ function BillingModal({
     setSelectedPack(pack);
     setPaymentMethod(null);
     setMessage("");
+    setMessageType("info");
     addLog(`[BILLING] 已选择积分包: ${packId}`);
   };
 
@@ -685,9 +687,11 @@ function BillingModal({
   //  STRIPE (信用卡 / 支付宝 / 微信支付)
   // ═══════════════════════════════════════════════════════
   const handleStripeCheckout = async () => {
-    if (!selectedPack || !paymentMethod) return;
+    // 防重复点击：会话创建期间锁定按钮
+    if (!selectedPack || !paymentMethod || loading) return;
     setLoading(true);
     setMessage("");
+    setMessageType("info");
     addLog(`[Stripe] 正在创建 ${selectedPack.id} 支付会话 (${paymentMethod})...`);
 
     try {
@@ -702,23 +706,37 @@ function BillingModal({
         }),
       });
 
-      const data = await res.json();
+      let data: any = {};
+      try {
+        data = await res.json();
+      } catch {
+        data = {};
+      }
 
       if (!res.ok) {
-        throw new Error(data.error || t("stripe_error_create"));
+        // 后端返回 error（中文原因）+ detail（原始 Stripe 细节），优先展示具体原因
+        throw new Error(data.detail || data.error || t("stripe_error_create"));
       }
 
       if (data.mock) {
+        const reason = data.detail || data.message || "未配置真实的 Stripe Secret Key";
         finishPayment(selectedPack, "stripe", data.sessionId, data.credits || selectedPack.credits);
-        setMessage(`✅ 演示模式 — ${selectedPack.credits} 积分包购买成功`);
-        addLog(`[Stripe] 演示模式: ${selectedPack.id} 购买成功`);
+        setMessage(`✅ 演示模式 — ${selectedPack.credits} 积分包购买成功（${reason}，未产生真实扣款）`);
+        setMessageType("success");
+        addLog(`[Stripe] 演示模式: ${selectedPack.id} 购买成功（${reason}）`);
         setLoading(false);
         return;
       }
 
       if (data.fallback) {
         setMessage(`⚠️ ${t("stripe_fallback_msg")}`);
+        setMessageType("warn");
         addLog(`[Stripe] ${paymentMethod} 未开通，已自动降级为信用卡支付`);
+      }
+
+      // 校验跳转 URL：防止拿到空值导致页面跳转到无效地址
+      if (!data.url || !/^https?:\/\//.test(data.url)) {
+        throw new Error("Stripe 支付会话创建成功但缺少有效跳转 URL，请稍后重试");
       }
 
       addLog(`[Stripe] 已进入 Stripe 真实收银台，正在跳转支付页面...`);
@@ -726,6 +744,7 @@ function BillingModal({
     } catch (error: any) {
       const errMsg = error.message || t("billing_error_payment_failed");
       setMessage(`❌ ${errMsg}`);
+      setMessageType("error");
       addLog(`[Stripe Error] ${errMsg}`);
       setLoading(false);
     }
@@ -803,7 +822,11 @@ function BillingModal({
         <div className="billing-status-bar">
           <span className="badge badge-free">{t("billing_topup_note")}</span>
         </div>
-        {message && <div className="billing-message">{message}</div>}
+        {message && (
+          <div className={`billing-message ${messageType}`} role="alert" aria-live="polite">
+            {message}
+          </div>
+        )}
 
         {/* ─── Credits Top-up 积分包（一次性付款，无订阅）─── */}
         <div className="plan-grid">
