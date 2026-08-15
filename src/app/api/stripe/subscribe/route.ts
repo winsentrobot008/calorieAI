@@ -52,10 +52,11 @@ export async function POST(request: NextRequest) {
     });
 
     const body = await request.json().catch(() => ({}));
-    const { user_id, email, success_url, cancel_url } = body;
-    // Pro 订阅 Paywall 强制全英文（Stripe locale=en）：商品名/描述恒定英文（008 SOP-04 §4.4/§5），
-    // 统一走 stripe-i18n，杜绝「英文支付页 + 中文商品名」的中英混杂盲点。
-    const item = getLocalizedPaymentItem("pro_monthly", "en");
+    const { user_id, email, success_url, cancel_url, locale, current_lang } = body;
+    // Pro 订阅 Paywall 商品名/描述与应用语言联动（统一走 stripe-i18n）：
+    // EN（或任何非中文环境）→ 100% 标准英文（零汉字）；zh → 中文商品文案。
+    // Stripe 支付页本身始终 locale=en（全英文收银台），杜绝中英混杂盲点。
+    const item = getLocalizedPaymentItem("pro_monthly", locale || current_lang || "en");
     const origin =
       request.headers.get("origin") ||
       request.nextUrl.origin ||
