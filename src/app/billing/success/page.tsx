@@ -5,7 +5,12 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { CheckCircle, XCircle, Loader2 } from "lucide-react";
 import { t, useLocale } from "@/lib/i18n";
 import { getCreditPack } from "@/lib/credit-packs";
-import { recordLocalPayment, addCredits } from "@/lib/local-store";
+import {
+  recordLocalPayment,
+  addCredits,
+  writeCredits,
+  writeProFlag,
+} from "@/lib/local-store";
 
 function BillingSuccessContent() {
   useLocale();
@@ -14,8 +19,8 @@ function BillingSuccessContent() {
   const [status, setStatus] = useState<"verifying" | "success" | "error">("verifying");
   const [message, setMessage] = useState("");
 
-  // 支付成功后本地积分包到账（Credits Top-up，无订阅；服务端 Webhook 为权威入账）
-  const applyLocalTopup = (packId: string | null, creditsParam: string | null) => {
+  // 演示模式入账：无 Webhook，本地到账 + 服务端同步（仅 mock 路径使用）
+  const applyMockTopup = (packId: string | null, creditsParam: string | null) => {
     try {
       const pack = getCreditPack(packId);
       const credits = pack ? pack.credits : Number(creditsParam || 0) || 10;
@@ -37,8 +42,37 @@ function BillingSuccessContent() {
       }).catch(() => {});
       console.log(`[BillingSuccess] 积分包到账 +${credits} 积分，余额 ${next}`);
     } catch (err) {
-      console.error("[BillingSuccess] localStorage 写入失败:", err);
+      console.error("[BillingSuccess] mock 入账失败:", err);
     }
+  };
+
+  /**
+   * 真实支付路径：以服务端 Webhook 入账为唯一权威，轮询 /api/v1/user/credits
+   * 直到余额达到预期（最多约 12s），期间不做任何本地二次入账，杜绝双加积分。
+   */
+  const verifyServerCredits = async (
+    packId: string | null,
+    creditsParam: string | null
+  ): Promise<number | null> => {
+    const uid = localStorage.getItem("user_id") || "anonymous";
+    const pack = getCreditPack(packId);
+    const expected = pack ? pack.credits : Number(creditsParam || 0) || 10;
+    for (let i = 0; i < 10; i++) {
+      try {
+        const res = await fetch(`/api/v1/user/credits?user_id=${encodeURIComponent(uid)}`);
+        const d = await res.json();
+        if (d && typeof d.credits === "number") {
+          // 服务端真库数据回写本地缓存，保证刷新后展示一致
+          writeCredits(d.credits);
+          writeProFlag(!!d.is_pro);
+          if (d.credits >= expected) return d.credits;
+        }
+      } catch {
+        /* 轮询失败继续重试 */
+      }
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+    return null;
   };
 
   useEffect(() => {
@@ -48,7 +82,7 @@ function BillingSuccessContent() {
     const isMock = searchParams.get("mock") === "true";
 
     if (isMock) {
-      applyLocalTopup(packId, creditsParam);
+      applyMockTopup(packId, creditsParam);
       setStatus("success");
       setMessage(t("billing_success_credits", { credits: creditsParam || "10" }));
       return;
@@ -60,10 +94,17 @@ function BillingSuccessContent() {
       return;
     }
 
-    // 本地即时到账（Webhook 会在服务端权威入账，幂等去重）
-    applyLocalTopup(packId, creditsParam);
-    setStatus("success");
-    setMessage(t("billing_success_credits", { credits: creditsParam || "10" }));
+    // 真实支付：仅以服务端 Webhook 入账为准，轮询确认后再展示成功
+    setStatus("verifying");
+    (async () => {
+      const confirmed = await verifyServerCredits(packId, creditsParam);
+      setStatus("success");
+      setMessage(
+        confirmed != null
+          ? t("billing_success_credits_confirmed", { credits: confirmed })
+          : t("billing_success_credits_pending")
+      );
+    })();
   }, [searchParams]);
 
   return (

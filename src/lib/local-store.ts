@@ -10,10 +10,35 @@
 
 export const CREDIT_KEY = "user_credits";
 export const PAYMENTS_KEY = "user_payments";
+export const PRO_KEY = "user_pro";
 export const DEFAULT_CREDITS = 3;
 export const AD_REWARD_CREDITS = 10;
 export const AD_COUNTDOWN_SECONDS = 4;
 export const PAYMENT_CREDIT_BONUS = 10;
+
+/**
+ * 清空当前客户端的积分 / Pro / 支付流水缓存。
+ * 登录新账号或退出时调用，防止旧账号或演示模式的残留数据污染新账号。
+ * （user_id / user_email 属于认证态，不在此清理。）
+ */
+export function clearUserDataCache(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(CREDIT_KEY);
+  localStorage.removeItem(PAYMENTS_KEY);
+  localStorage.removeItem(PRO_KEY);
+}
+
+/** 写入服务端返回的 Pro 状态到本地缓存（仅供离线快速展示，权威值以服务端为准） */
+export function writeProFlag(value: boolean): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(PRO_KEY, value ? "true" : "false");
+}
+
+/** 读取本地 Pro 缓存（默认 false） */
+export function readProFlag(): boolean {
+  if (typeof window === "undefined") return false;
+  return localStorage.getItem(PRO_KEY) === "true";
+}
 
 /** 读取积分余额：新用户首次访问自动赠送 3 积分 */
 export function readCredits(): number {

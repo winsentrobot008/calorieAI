@@ -15,6 +15,8 @@ import { isAdminIdentity as checkAdminIdentity } from "@/lib/admin-identity";
 import {
   readCredits,
   writeCredits,
+  writeProFlag,
+  clearUserDataCache,
   addCredits,
   recordLocalPayment,
   AD_REWARD_CREDITS,
@@ -577,7 +579,25 @@ function Profile({ addLog }: { addLog: (msg: string) => void }) {
 }
 
 // ─── Login Modal ───────────────────────────────────────────────────────
-function LoginModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: string) => void }) {
+interface AuthSessionState {
+  user_id: string;
+  email: string;
+  name?: string;
+  credits?: number;
+  is_pro?: boolean;
+}
+
+function LoginModal({
+  onClose,
+  addLog,
+  onAuthChange,
+  onLogout,
+}: {
+  onClose: () => void;
+  addLog: (msg: string) => void;
+  onAuthChange?: (session: AuthSessionState) => void;
+  onLogout?: () => void;
+}) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState(""); const [password, setPassword] = useState(""); const [name, setName] = useState("");
   const [loading, setLoading] = useState(false); const [error, setError] = useState("");
@@ -589,18 +609,47 @@ function LoginModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: st
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault(); setLoading(true); setError("");
-    await new Promise(r => setTimeout(r, 500));
-    const userId = `user_${Date.now()}`;
-    localStorage.setItem("user_id", userId);
-    localStorage.setItem("user_email", email);
-    addLog(`[AUTH] 登录成功: ${email}`);
-    onClose();
+    try {
+      // 登录/注册走真实后端：服务端返回稳定 user_id + 权威积分/Pro 状态
+      const res = await fetch(mode === "login" ? "/api/v1/user/login" : "/api/v1/user/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password, name }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || "登录失败，请稍后重试");
+
+      // 切换账号前清空旧账号/演示模式的积分、Pro、支付流水残留
+      clearUserDataCache();
+      localStorage.setItem("user_id", data.user_id);
+      localStorage.setItem("user_email", data.email || email);
+      if (data.name) localStorage.setItem("user_name", data.name);
+      // 以服务端返回的权威状态回写本地缓存
+      if (typeof data.credits === "number") writeCredits(data.credits);
+      writeProFlag(!!data.is_pro);
+      addLog(`[AUTH] 登录成功: ${data.email || email}（user_id=${data.user_id}）`);
+      onAuthChange?.({
+        user_id: data.user_id,
+        email: data.email || email,
+        name: data.name,
+        credits: data.credits,
+        is_pro: data.is_pro,
+      });
+      onClose();
+    } catch (err: any) {
+      setError(err.message || "登录失败");
+    }
     setLoading(false);
   };
 
   const handleAnonymous = () => {
-    localStorage.setItem("user_id", `anon_${Date.now()}`);
+    // 游客模式同样清空旧账号残留，保证匿名账号从服务端权威状态起步
+    clearUserDataCache();
+    const anonId = `anon_${Date.now()}`;
+    localStorage.setItem("user_id", anonId);
+    localStorage.removeItem("user_email");
     addLog("[AUTH] 游客模式继续");
+    onAuthChange?.({ user_id: anonId, email: "" });
     onClose();
   };
 
@@ -617,7 +666,7 @@ function LoginModal({ onClose, addLog }: { onClose: () => void; addLog: (msg: st
         </form>
         <div className="login-toggle"><button className="btn-link" onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); }}>{mode === "login" ? t("no_account_register") : t("have_account_login")}</button></div>
         <div className="login-anonymous"><p>{t("login_anonymous_hint")}</p><button className="btn-secondary login-anon-btn" onClick={handleAnonymous}>{t("login_continue_anon")}</button></div>
-        {hydrated && localStorage.getItem("user_email") && (<div className="login-logout"><button className="btn-link logout-btn" onClick={() => { localStorage.removeItem("user_id"); localStorage.removeItem("user_email"); addLog("[AUTH] 已退出登录"); onClose(); }}>{t("logout")}</button></div>)}
+        {hydrated && localStorage.getItem("user_email") && (<div className="login-logout"><button className="btn-link logout-btn" onClick={() => { localStorage.removeItem("user_id"); localStorage.removeItem("user_email"); localStorage.removeItem("user_name"); clearUserDataCache(); addLog("[AUTH] 已退出登录"); onLogout?.(); onClose(); }}>{t("logout")}</button></div>)}
       </div>
     </div>
   );
@@ -645,10 +694,12 @@ function BillingModal({
   onClose,
   addLog,
   onPaymentSuccess,
+  onServerPaymentSuccess,
 }: {
   onClose: () => void;
   addLog: (msg: string) => void;
   onPaymentSuccess: (creditsAdded: number) => void;
+  onServerPaymentSuccess?: () => void;
 }) {
   const [selectedPack, setSelectedPack] = useState<CreditPack | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodType | null>(null);
@@ -666,8 +717,24 @@ function BillingModal({
   const getUserId = () => typeof window !== "undefined" ? localStorage.getItem("user_id") || "anonymous" : "anonymous";
   const getUserEmail = () => typeof window !== "undefined" ? localStorage.getItem("user_email") || "" : "";
 
-  // 支付完成统一处理：本地记录流水 + 积分到账（Credits Top-up，无订阅）
-  const finishPayment = (pack: CreditPack, provider: "stripe" | "paypal", orderId?: string, creditsAdded?: number) => {
+  /**
+   * 支付完成统一处理：
+   *   - 默认（mock/演示）：本地记录流水 + 客户端入账 + 服务端同步；
+   *   - serverCredited=true（真实支付）：服务端捕获/Webhook 已权威入账，
+   *     前端不再二次入账，仅触发服务端数据重拉，避免双重加积分。
+   */
+  const finishPayment = (
+    pack: CreditPack,
+    provider: "stripe" | "paypal",
+    orderId?: string,
+    creditsAdded?: number,
+    opts?: { serverCredited?: boolean }
+  ) => {
+    if (opts?.serverCredited) {
+      addLog(`[BILLING] 真实支付完成: ${pack.id}（${provider}）已由服务端权威入账`);
+      onServerPaymentSuccess?.();
+      return;
+    }
     recordLocalPayment({ orderId: orderId || `pay_${Date.now()}`, provider, plan: pack.id, amount: pack.priceUsd });
     onPaymentSuccess(creditsAdded ?? pack.credits);
     addLog(`[BILLING] 支付完成: ${pack.id}（${provider}）入账 $${pack.priceUsd.toFixed(2)}，+${creditsAdded ?? pack.credits} 积分`);
@@ -794,7 +861,8 @@ function BillingModal({
       }
       if (capture.status === "COMPLETED") {
         addLog(`[PayPal] 支付成功! 订单 ${capture.id}, 金额 $${capture.amount?.value || "?"}`);
-        finishPayment(selectedPack!, "paypal", data.orderID, capture.credits_added || selectedPack!.credits);
+        // 真实支付：capture 路由已在服务端权威入账，前端仅重拉服务端数据
+        finishPayment(selectedPack!, "paypal", data.orderID, capture.credits_added || selectedPack!.credits, { serverCredited: true });
         setMessage(`✅ 支付成功! ${selectedPack!.credits} 积分已到账 🎉`);
       } else {
         addLog(`[PayPal] 支付状态异常: ${capture.status}`);
@@ -998,6 +1066,28 @@ export default function Home() {
 
   const getUserId = () => (typeof window !== "undefined" ? localStorage.getItem("user_id") || "anonymous" : "anonymous");
 
+  /**
+   * 统一服务端同步：以 /api/v1/user/credits 真库数据为准，
+   * 刷新页面 / 登录 / 退出 / 支付完成后调用，覆盖本地缓存（禁止仅依赖 LocalStorage）。
+   */
+  const syncFromServer = useCallback(async (uid?: string) => {
+    const userId = uid || getUserId();
+    try {
+      const res = await fetch(`/api/v1/user/credits?user_id=${encodeURIComponent(userId)}`);
+      const d = await res.json();
+      if (d && typeof d.credits === "number") {
+        writeCredits(d.credits);
+        setCredits(d.credits);
+        const pro = !!d.is_pro;
+        writeProFlag(pro);
+        setIsPro(pro);
+      }
+      return d;
+    } catch {
+      return null;
+    }
+  }, []);
+
   // Handle admin login
   const handleAdminLogin = (s: any) => {
     sessionStorage.setItem("admin_session", JSON.stringify(s));
@@ -1018,29 +1108,16 @@ export default function Home() {
   // 挂载后才读取 localStorage 中的 user_email, 避免 React #418 (DOM 文本不一致)。
   useEffect(() => {
     setMounted(true);
-    if (typeof window !== "undefined" && localStorage.getItem("user_pro") === "true") {
-      setIsPro(true);
-    }
     setCredits(readCredits());
-    // 冷启动 / 跨设备：以服务器持久化积分为准，保证完全一致
-    const userId = getUserId();
-    fetch(`/api/v1/user/credits?user_id=${encodeURIComponent(userId)}`)
-      .then((r) => r.json())
-      .then((d) => {
-        if (d && typeof d.credits === "number") {
-          writeCredits(d.credits);
-          setCredits(d.credits);
-          if (d.is_pro) setIsPro(true);
-        }
-      })
-      .catch(() => {});
+    // 冷启动 / 刷新页面：强制从服务端真库拉取最新积分与 Pro 状态
+    syncFromServer();
     // 访问量 / IP 监控上报（best-effort）
     fetch("/api/v1/track/visit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: "/" }),
     }).catch(() => {});
-  }, []);
+  }, [syncFromServer]);
 
   // 广告播放完成 → 发放 5 积分并刷新 UI
   const handleAdReward = useCallback(() => {
@@ -1060,6 +1137,10 @@ export default function Home() {
         if (d && typeof d.credits === "number") {
           writeCredits(d.credits);
           setCredits(d.credits);
+        }
+        if (d && typeof d.is_pro === "boolean") {
+          writeProFlag(d.is_pro);
+          setIsPro(d.is_pro);
         }
       })
       .catch(() => {});
@@ -1082,6 +1163,10 @@ export default function Home() {
           writeCredits(d.credits);
           setCredits(d.credits);
         }
+        if (d && typeof d.is_pro === "boolean") {
+          writeProFlag(d.is_pro);
+          setIsPro(d.is_pro);
+        }
       })
       .catch(() => {});
   }, []);
@@ -1102,10 +1187,16 @@ export default function Home() {
           writeCredits(d.credits);
           setCredits(d.credits);
         }
+        if (d && typeof d.is_pro === "boolean") {
+          writeProFlag(d.is_pro);
+          setIsPro(d.is_pro);
+        }
       })
-      .catch(() => {});
+      .catch(() => {})
+      // 无论 POST 结果如何，都以服务端真库为准再同步一次
+      .finally(() => syncFromServer());
     addLog(`[BILLING] 积分到账: +${delta}（余额 ${next}）`);
-  }, [addLog]);
+  }, [addLog, syncFromServer]);
 
   // 管理员登录态：pending 仅表示打开登录页；完整 session 才进入后台
   if (adminSession && !adminSession.pending) {
@@ -1178,8 +1269,37 @@ export default function Home() {
       </footer>
 
       {/* Modals */}
-      {showLogin && <LoginModal onClose={() => setShowLogin(false)} addLog={addLog} />}
-      {showBilling && <BillingModal onClose={() => setShowBilling(false)} addLog={addLog} onPaymentSuccess={handlePaymentSuccess} />}
+      {showLogin && (
+        <LoginModal
+          onClose={() => setShowLogin(false)}
+          addLog={addLog}
+          onAuthChange={(session) => {
+            // 登录/切换账号：先以服务端返回状态即时更新，再强制重新拉取真库
+            if (typeof session.credits === "number") {
+              writeCredits(session.credits);
+              setCredits(session.credits);
+            }
+            const pro = !!session.is_pro;
+            writeProFlag(pro);
+            setIsPro(pro);
+            syncFromServer(session.user_id);
+          }}
+          onLogout={() => {
+            // 退出：清空本地状态缓存，恢复匿名账号的服务端权威状态
+            setIsPro(false);
+            setCredits(DEFAULT_CREDITS);
+            syncFromServer();
+          }}
+        />
+      )}
+      {showBilling && (
+        <BillingModal
+          onClose={() => setShowBilling(false)}
+          addLog={addLog}
+          onPaymentSuccess={handlePaymentSuccess}
+          onServerPaymentSuccess={() => syncFromServer()}
+        />
+      )}
       {adOpen && <AdModal onClose={() => setAdOpen(false)} onReward={handleAdReward} />}
     </div>
   );

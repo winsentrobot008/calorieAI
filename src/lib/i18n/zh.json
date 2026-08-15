@@ -152,6 +152,8 @@
   "billing_processing": "处理中...",
   "billing_success_title": "🎉 支付成功！",
   "billing_success_credits": "✅ {credits} 积分已到账！AI 识图 1 积分/次，按次付费无订阅。",
+  "billing_success_credits_confirmed": "✅ 支付成功！服务端已确认到账，当前积分余额 {credits}。",
+  "billing_success_credits_pending": "支付成功！积分正在由服务端入账，稍后刷新即可看到最新余额。",
   "billing_success_mock": "演示模式：{plan} 订阅成功！",
   "billing_success_missing_session": "缺少支付会话 ID，请联系客服。",
   "billing_success_thanks": "支付成功！感谢你的订阅 ❤️",

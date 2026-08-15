@@ -152,6 +152,8 @@
   "billing_processing": "Processing...",
   "billing_success_title": "🎉 Payment Successful!",
   "billing_success_credits": "✅ {credits} credits added! 1 credit per AI scan — pay-per-use, no subscription.",
+  "billing_success_credits_confirmed": "✅ Payment successful! Server confirmed — current balance: {credits} credits.",
+  "billing_success_credits_pending": "Payment received! Credits are being added on the server — refresh shortly to see your balance.",
   "billing_success_mock": "Demo mode: {plan} subscribed successfully!",
   "billing_success_missing_session": "Missing payment session ID. Please contact support.",
   "billing_success_thanks": "Payment successful! Thank you for your subscription ❤️",
