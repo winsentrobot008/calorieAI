@@ -23,8 +23,10 @@ export default defineConfig({
   },
   webServer: {
     // 说明：本环境 Turbopack dev server 在 Playwright 中偶发水合异常，
-    // 因此 E2E 使用生产构建（next start），行为与线上一致。
-    command: `npm run build && npm run start -- -p ${PORT}`,
+    // 因此 E2E 使用生产构建（next start），行为与线上一致；
+    // 构建由 npm run test:e2e（build && playwright test）先行完成，
+    // webServer 只负责启动，避免 next build 并发锁问题。
+    command: `npm run start -- -p ${PORT}`,
     url: BASE_URL,
     reuseExistingServer: false,
     timeout: 180_000,

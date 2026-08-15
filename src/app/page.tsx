@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
 import { Mic, X } from "lucide-react";
-import { t, useLocale } from "@/lib/i18n";
+import { t, useLocale, getLocale } from "@/lib/i18n";
 import { CREDIT_PACKS, type CreditPack } from "@/lib/credit-packs";
 import { compressImageFile } from "@/lib/image-utils";
 import Header from "@/components/Header";
@@ -360,7 +360,11 @@ function MealRecorder({
       const res = await fetch("/api/stripe/subscribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: getUserId(), email: getUserEmail() }),
+        body: JSON.stringify({
+          user_id: getUserId(),
+          email: getUserEmail(),
+          locale: getLocale(),
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "订阅创建失败");
@@ -948,6 +952,7 @@ function BillingModal({
           payment_method: paymentMethod === "card" ? "card" : paymentMethod, // "alipay" | "wechat_pay"
           user_id: getUserId(),
           email: getUserEmail(),
+          locale: getLocale(),
         }),
       });
 

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getLocalizedPaymentItem } from "@/lib/stripe-i18n";
 
 /**
  * POST /api/stripe/subscribe
@@ -52,6 +53,9 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json().catch(() => ({}));
     const { user_id, email, success_url, cancel_url } = body;
+    // Pro 订阅 Paywall 强制全英文（Stripe locale=en）：商品名/描述恒定英文（008 SOP-04 §4.4/§5），
+    // 统一走 stripe-i18n，杜绝「英文支付页 + 中文商品名」的中英混杂盲点。
+    const item = getLocalizedPaymentItem("pro_monthly", "en");
     const origin =
       request.headers.get("origin") ||
       request.nextUrl.origin ||
@@ -72,8 +76,8 @@ export async function POST(request: NextRequest) {
           price_data: {
             currency: "usd",
             product_data: {
-              name: "CalorieAI Pro",
-              description: "Unlimited AI meal scans — $9.99/month",
+              name: item.name,
+              description: item.description,
             },
             unit_amount: Math.round(PRO_PRICE_USD * 100),
             recurring: { interval: "month" },

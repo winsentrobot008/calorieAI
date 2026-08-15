@@ -10,11 +10,17 @@
  *   [M1] 按钮触达 ≥48px：核心交互按钮 boundingBox().height ≥ 48
  *   [M2] 全英文 Stripe 路由：免费 2 次后第 3 次拍照 → 跳转 checkout.stripe.com + <html lang="en">
  *   [M3] Cal AI 核心链路：极简 Onboarding → 拍照 AI 拆解 → Save to Log → 今日进度条数值增加
+ *   [M4] 全英文 50 积分包：Billing → Booster(50) → Stripe checkout 商品名 "CalorieAI 50 Credits Pack" 且零汉字
+ *
+ * 零中文字符盲点断言（SOP-04 §4.4 / §5 质量闸门「全外语环境零汉字盲点」）：
+ *   所有全英文用例必须对 Stripe 页面商品名/描述及应用主界面文本执行
+ *   expect(text).not.toMatch(/[\u4e00-\u9fa5]/)，出现任何中英混杂一律 Fail。
  *
  * 测试桩说明（TEST-STUB，红线约束见 SOP-04 §4.4 禁令一）：
- *   analyze-image / stripe-subscribe 仅在 E2E 脚本内显式拦截，以支撑确定性断言；
- *   生产链路从不回退 Mock（A→B→C 真实回退链，见 MEMORY.md 决策 7），
- *   Stripe 未配密钥仅返回演示降级提示（mock:true），不会静默伪造成真实支付。
+ *   analyze-image / stripe-subscribe / stripe-checkout / checkout.stripe.com
+ *   仅在 E2E 脚本内显式拦截，以支撑确定性断言；生产链路从不回退 Mock
+ *   （A→B→C 真实回退链，见 MEMORY.md 决策 7），Stripe 未配密钥仅返回演示降级提示
+ *   （mock:true），不会静默伪造成真实支付。
  */
 
 import { test, expect, type Page } from "@playwright/test";
@@ -57,6 +63,48 @@ const EXPECTED_KCAL = 281; // 247 + 34
 // ── TEST-STUB：确定性 Stripe Checkout URL（生产由 /api/stripe/subscribe 真实创建）──
 // 未配 STRIPE_SECRET_KEY 时后端返回 mock:true 不跳转，故在此拦截以稳定验证「前端 Paywall → Stripe 路由」。
 const STRIPE_CHECKOUT_URL = "https://checkout.stripe.com/c/pay/cs_test_benchmark?locale=en";
+
+// ── TEST-STUB：全英文商品摘要页（镜像真实 Stripe Checkout 左侧商品区）──
+// 深度断言锚点：商品名必须为英文 "CalorieAI Pro"（无任何中文字符），描述为地道英文。
+const STRIPE_CHECKOUT_PAGE = `<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>Checkout</title></head>
+  <body>
+    <main>
+      <section class="ProductSummary" data-testid="product-summary">
+        <h1 data-testid="product-name">CalorieAI Pro</h1>
+        <p data-testid="product-description">Unlimited AI meal scans - $9.99/month (cancel anytime)</p>
+        <div class="amount">$9.99 / month</div>
+      </section>
+    </main>
+  </body>
+</html>`;
+
+// ── TEST-STUB：50 积分包（Booster）全英文商品摘要页 ──
+// 深度断言锚点：商品名必须严格等于 "CalorieAI 50 Credits Pack" 且零汉字（008 SOP-04 §5）。
+const STRIPE_CHECKOUT_PAGE_50 = `<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>Checkout</title></head>
+  <body>
+    <main>
+      <section class="ProductSummary" data-testid="product-summary">
+        <h1 data-testid="product-name">CalorieAI 50 Credits Pack</h1>
+        <p data-testid="product-description">One-time payment - 50 Credits added instantly (No subscription)</p>
+        <div class="amount">$4.00</div>
+      </section>
+    </main>
+  </body>
+</html>`;
+
+// ── 零汉字盲点断言（SOP-04 §4.4 / §5）：CJK 统一汉字正则 ──
+const CJK_CHARS_REGEX = /[\u4e00-\u9fa5]/;
+
+/** 断言文本绝不含中文字符；出现中英混杂（含 Stripe 页面/应用界面）一律 Fail。 */
+function expectNoChinese(text: string, label = "text") {
+  expect(text, `${label} must NOT contain any CJK char (zero-Chinese gate)`).not.toMatch(
+    CJK_CHARS_REGEX
+  );
+}
 
 /**
  * 干净状态引导：清空历史餐食/画像/扫描计数 + 固定英文 UI（en）。
@@ -252,8 +300,11 @@ test("M2 · 全英文 Stripe 路由：免费 2 次后第 3 次拍照 → checkou
     })
   );
   // TEST-STUB：Stripe 订阅会话返回确定性 checkout URL（生产未配 key 仅演示降级，不静默跳转）
-  await page.route("**/api/stripe/subscribe", (route) =>
-    route.fulfill({
+  // 同时捕获请求负载，断言「EN 模式联动」：前端必须把 locale=en 传给 Stripe 路由。
+  let subscribePayload: Record<string, unknown> | null = null;
+  await page.route("**/api/stripe/subscribe", (route) => {
+    subscribePayload = route.request().postDataJSON();
+    return route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
@@ -263,6 +314,15 @@ test("M2 · 全英文 Stripe 路由：免费 2 次后第 3 次拍照 → checkou
         interval: "month",
         plan: "pro_monthly",
       }),
+    });
+  });
+
+  // TEST-STUB：checkout.stripe.com 页面返回全英文商品摘要，供商品名/描述深度断言
+  await page.route("https://checkout.stripe.com/**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: STRIPE_CHECKOUT_PAGE,
     })
   );
 
@@ -283,4 +343,105 @@ test("M2 · 全英文 Stripe 路由：免费 2 次后第 3 次拍照 → checkou
   await uploadAndAnalyze(page, false); // 不等待卡片：直接跳转 Stripe
   await page.waitForURL(/checkout\.stripe\.com/, { timeout: 90000 });
   expect(page.url()).toContain("checkout.stripe.com");
+
+  // EN 模式联动：前端向 /api/stripe/subscribe 提交 locale=en
+  expect(subscribePayload, "subscribe request should carry locale").not.toBeNull();
+  expect(subscribePayload!.locale).toBe("en");
+
+  // ── 深度断言：左侧商品名/描述必须为地道英文 ──────────
+  // 1) 页面语言：<html lang="en">
+  await expect(page.locator("html")).toHaveAttribute("lang", /^en/i, { timeout: 30000 });
+  // 2) 商品标题：可见、匹配英文 "Pro"、绝不包含任何中文字符 [\u4e00-\u9fa5]
+  const summary = page.locator('[data-testid="product-summary"]');
+  await expect(summary).toBeVisible({ timeout: 30000 });
+  const productTitle = page.locator('[data-testid="product-name"]');
+  await expect(productTitle).toContainText("CalorieAI Pro");
+  const titleText = (await productTitle.textContent()) || "";
+  expect(titleText).toMatch(/Pro/i);
+  expectNoChinese(titleText, "Stripe subscribe product name");
+  // 3) 商品描述：全英文（Unlimited / month），同样无中文字符
+  const productDesc = page.locator('[data-testid="product-description"]');
+  const descText = (await productDesc.textContent()) || "";
+  expectNoChinese(descText, "Stripe subscribe product description");
+  expect(descText).toMatch(/Unlimited|month/i);
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// [M4] 全英文 50 积分包 —— Billing → Booster(50) → Stripe Checkout
+// 验证「CalorieAI 50 Credits Pack」商品名 100% 英文、零汉字（008 SOP-04 §5 质量闸门）
+// ═══════════════════════════════════════════════════════════════════════
+test("M4 · 全英文 50 积分包：Billing → Booster(50) → Stripe checkout 商品名 'CalorieAI 50 Credits Pack' 且零汉字", async ({
+  page,
+}) => {
+  await bootstrap(page);
+  await page.goto("/");
+  await loginWithGoogle(page);
+  await completeOnboarding(page);
+
+  // TEST-STUB：捕获 checkout 请求负载，断言 EN 模式联动（前端必须传 locale=en）
+  let checkoutPayload: Record<string, unknown> | null = null;
+  await page.route("**/api/stripe/checkout", (route) => {
+    checkoutPayload = route.request().postDataJSON();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        sessionId: "cs_test_pack_booster",
+        url: STRIPE_CHECKOUT_URL,
+        pack_id: "pack_booster",
+        credits: 50,
+        amount: 4.0,
+        payment_methods: ["card"],
+        fallback: false,
+      }),
+    });
+  });
+
+  // TEST-STUB：checkout.stripe.com 返回 50 积分包全英文商品摘要页
+  await page.route("https://checkout.stripe.com/**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: STRIPE_CHECKOUT_PAGE_50,
+    })
+  );
+
+  // 打开 Billing（Header 升级按钮）
+  await page.locator("button.btn-upgrade").click();
+  await expect(page.locator(".billing-modal")).toBeVisible({ timeout: 15000 });
+
+  // 应用内 Billing 界面零汉字（en locale）：任何中英混杂立即 Fail
+  const billingText = (await page.locator(".billing-modal").innerText()) || "";
+  expectNoChinese(billingText, "Billing modal (app UI, en)");
+
+  // 选 Booster(50) 积分包（第 2 张 plan-card，popular）
+  const boosterCard = page.locator(".plan-card").nth(1);
+  await boosterCard.locator(".plan-btn").click();
+  await expect(page.locator(".plan-card.selected")).toHaveCount(1);
+
+  // 选支付方式：信用卡 → 点击 Stripe 支付
+  await page.locator(".payment-method-btn").nth(0).click();
+  await page.locator(".stripe-pay-btn").click();
+
+  // 跳转 Stripe Checkout
+  await page.waitForURL(/checkout\.stripe\.com/, { timeout: 90000 });
+  expect(page.url()).toContain("checkout.stripe.com");
+
+  // EN 模式联动：前端向 /api/stripe/checkout 提交 locale=en + pack_id=pack_booster
+  expect(checkoutPayload, "checkout request should carry locale").not.toBeNull();
+  expect(checkoutPayload!.locale).toBe("en");
+  expect(checkoutPayload!.pack_id).toBe("pack_booster");
+
+  // 深度断言：50 积分包商品名 = "CalorieAI 50 Credits Pack" 且零汉字
+  await expect(page.locator("html")).toHaveAttribute("lang", /^en/i, { timeout: 30000 });
+  const summary = page.locator('[data-testid="product-summary"]');
+  await expect(summary).toBeVisible({ timeout: 30000 });
+  const productTitle = page.locator('[data-testid="product-name"]');
+  await expect(productTitle).toHaveText("CalorieAI 50 Credits Pack");
+  const titleText = (await productTitle.textContent()) || "";
+  expectNoChinese(titleText, "Stripe checkout 50-credits product name");
+  const productDesc = page.locator('[data-testid="product-description"]');
+  const descText = (await productDesc.textContent()) || "";
+  expectNoChinese(descText, "Stripe checkout 50-credits product description");
+  expect(descText).toMatch(/50 Credits|One-time|instant/i);
 });

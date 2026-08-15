@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCreditPack, resolvePack, type CreditPack } from "@/lib/credit-packs";
+import { getLocalizedPaymentItem } from "@/lib/stripe-i18n";
 
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
@@ -151,7 +152,16 @@ export async function POST(request: NextRequest) {
     });
 
     const body = await request.json();
-    const { pack_id, payment_method = "all", success_url, cancel_url, user_id, email } = body;
+    const {
+      pack_id,
+      payment_method = "all",
+      success_url,
+      cancel_url,
+      user_id,
+      email,
+      locale,
+      current_lang,
+    } = body;
     const pack: CreditPack | undefined = pack_id ? getCreditPack(pack_id) : resolvePack(body.plan);
     if (!pack) {
       return NextResponse.json({ error: `未知积分包: ${pack_id}` }, { status: 400 });
@@ -163,7 +173,11 @@ export async function POST(request: NextRequest) {
       process.env.NEXT_PUBLIC_APP_URL ||
       "http://localhost:3000";
     const amountCents = Math.round(pack.priceUsd * 100);
-    const productLabel = `${pack.credits} 积分包`;
+
+    // ── 商品名称/描述与前端语言联动（统一走 stripe-i18n）──
+    // 008 SOP-04 §4.4 红线禁令 / §5 质量闸门：严禁在路由内硬编码中文商品名/描述；
+    // lang 命中 'en'（或任何非中文环境）时 name/description 100% 标准英文（零汉字），杜绝中英混杂。
+    const item = getLocalizedPaymentItem(pack.id, locale || current_lang || "en");
 
     // ── 确定支持的支付方式 ──────────────────────────────
     // 支持: 国际信用卡 + 支付宝 + 微信支付
@@ -198,8 +212,8 @@ export async function POST(request: NextRequest) {
           price_data: {
             currency: "usd",
             product_data: {
-              name: `CalorieAI ${productLabel}`,
-              description: `一次性付款 · 按次付费 · ${pack.credits} 积分即时到账（无订阅）`,
+              name: item.name,
+              description: item.description,
             },
             unit_amount: amountCents,
           },
