@@ -11,6 +11,8 @@
 export const CREDIT_KEY = "user_credits";
 export const PAYMENTS_KEY = "user_payments";
 export const PRO_KEY = "user_pro";
+/** 自动化演示专用 Pro 标记（仅由 ceo_visual_demo.py 等自动化脚本注入） */
+export const DEMO_PRO_KEY = "calorieai_demo_pro";
 export const DEFAULT_CREDITS = 3;
 export const AD_REWARD_CREDITS = 10;
 export const AD_COUNTDOWN_SECONDS = 4;
@@ -26,6 +28,8 @@ export function clearUserDataCache(): void {
   localStorage.removeItem(CREDIT_KEY);
   localStorage.removeItem(PAYMENTS_KEY);
   localStorage.removeItem(PRO_KEY);
+  // 真实登录/退出时清除自动化演示注入的 Pro 标记，隔离演示与生产状态
+  localStorage.removeItem(DEMO_PRO_KEY);
 }
 
 /** 写入服务端返回的 Pro 状态到本地缓存（仅供离线快速展示，权威值以服务端为准） */
@@ -38,6 +42,12 @@ export function writeProFlag(value: boolean): void {
 export function readProFlag(): boolean {
   if (typeof window === "undefined") return false;
   return localStorage.getItem(PRO_KEY) === "true";
+}
+
+/** 读取自动化演示注入的 Pro 标记（calorieai_demo_pro=true） */
+export function readDemoProFlag(): boolean {
+  if (typeof window === "undefined") return false;
+  return localStorage.getItem(DEMO_PRO_KEY) === "true";
 }
 
 /** 读取积分余额：新用户首次访问自动赠送 3 积分 */

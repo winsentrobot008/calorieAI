@@ -576,6 +576,9 @@ def main():
     parser.add_argument("--promo-en", action="store_true",
                         help="YouTube Shorts 英文宣推视频：locale en-US 全英文 UI、Edge-TTS 美音解说 4 段"
                              "（intro/scan/pro/CTA）、高码率高清 MP4（TEMP/calorieai_yt_promo_en.mp4）")
+    parser.add_argument("--pro-demo", action="store_true",
+                        help="演示 Pro 状态：向 localStorage 注入 calorieai_demo_pro=true（仅自动化演示使用，"
+                             "不改变生产代码中未登录默认非 Pro 的商业逻辑）")
     args = parser.parse_args()
     if args.promo_en:
         args.mode = "desktop"  # 宣推视频固定桌面端 16:10 画幅
@@ -590,6 +593,7 @@ def main():
         "mode": args.mode,
         "fast": args.fast,
         "promo_en": args.promo_en,
+        "pro_demo": args.pro_demo,
         "slow_mo_ms": slow_mo,
         "steps": [],
         "findings": {},
@@ -676,6 +680,12 @@ def main():
         page.add_init_script(script=TOAST_CATCH_JS)
         if args.promo_en:
             page.add_init_script(script="try { localStorage.setItem('calorieai_locale', 'en'); } catch (e) {}")
+        if args.pro_demo:
+            # 自动化演示 Pro 状态：显式注入本地标记；生产代码仅在读到该标记时展示 Pro
+            page.add_init_script(
+                script="try { localStorage.setItem('calorieai_demo_pro', 'true'); } catch (e) {}"
+            )
+            report["findings"]["pro_demo_marker"] = "calorieai_demo_pro=true injected"
         page.on("console", lambda m: report["console_errors"].append(m.text) if m.type == "error" else None)
 
         ledger = CreditLedger()

@@ -25,6 +25,7 @@ function ThemeToggle() {
 
 interface HeaderProps {
   isAdmin: boolean;
+  isLoggedIn: boolean;
   isPro: boolean;
   userLabel: string;
   onLoginClick: () => void;
@@ -38,6 +39,7 @@ interface HeaderProps {
  */
 export default function Header({
   isAdmin,
+  isLoggedIn,
   isPro,
   userLabel,
   onLoginClick,
@@ -64,7 +66,7 @@ export default function Header({
           className={`btn-upgrade ${isPro ? "btn-upgrade-active" : ""}`}
           onClick={onBillingClick}
         >
-          {isPro ? t("pro_active_badge") : t("pro_badge")}
+          {isPro ? t("pro_active_badge") : isLoggedIn ? t("pro_badge") : t("upgrade_badge")}
         </button>
         {isAdmin && (
           <Link href="/admin" className="btn-admin" aria-label={t("admin_dashboard_btn")}>

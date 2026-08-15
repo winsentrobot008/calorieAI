@@ -16,6 +16,7 @@ import {
   readCredits,
   writeCredits,
   writeProFlag,
+  readDemoProFlag,
   clearUserDataCache,
   addCredits,
   recordLocalPayment,
@@ -237,16 +238,20 @@ function TrendChart() {
 function MealRecorder({
   addLog,
   credits,
+  isLoggedIn,
   isPro,
   onSpendCredit,
   onOpenBilling,
+  onOpenLogin,
   onWatchAd,
 }: {
   addLog: (msg: string) => void;
   credits: number;
+  isLoggedIn: boolean;
   isPro: boolean;
   onSpendCredit: () => void;
   onOpenBilling: () => void;
+  onOpenLogin: () => void;
   onWatchAd: () => void;
 }) {
   const [mealType, setMealType] = useState("breakfast");
@@ -490,14 +495,31 @@ function MealRecorder({
               <button className="modal-close" onClick={() => setInsufficientOpen(false)}><X className="h-5 w-5" /></button>
             </div>
             <div className="ad-modal-body">
-              <p>{t("credits_insufficient_msg")}</p>
+              <p>
+                {isLoggedIn
+                  ? t("credits_insufficient_msg")
+                  : t("credits_insufficient_guest_msg")}
+              </p>
               <div className="ad-modal-actions">
-                <button className="btn-primary" onClick={() => { setInsufficientOpen(false); onWatchAd(); }}>
-                  {t("ad_watch_btn")}
-                </button>
-                <button className="btn-primary" onClick={() => { setInsufficientOpen(false); onOpenBilling(); }}>
-                  {t("upgrade_pro_btn")}
-                </button>
+                {isLoggedIn ? (
+                  <>
+                    <button className="btn-primary" onClick={() => { setInsufficientOpen(false); onWatchAd(); }}>
+                      {t("ad_watch_btn")}
+                    </button>
+                    <button className="btn-primary" onClick={() => { setInsufficientOpen(false); onOpenBilling(); }}>
+                      {t("upgrade_pro_btn")}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button className="btn-primary" onClick={() => { setInsufficientOpen(false); onOpenLogin(); }}>
+                      {t("login_title")}
+                    </button>
+                    <button className="btn-primary" onClick={() => { setInsufficientOpen(false); onOpenBilling(); }}>
+                      {t("buy_credits_btn")}
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -1059,6 +1081,15 @@ export default function Home() {
       role: adminSession?.role,
     });
 
+  // 登录态与 Pro 生效判定（商业逻辑）：
+  //  - 未登录（Guest）强制 isPro=false；唯一例外是自动化演示注入的
+  //    calorieai_demo_pro=true 标记（仅 ceo_visual_demo.py --pro-demo 写入）；
+  //  - 已登录时仅当服务端真库明确返回 is_pro=true / status=pro /
+  //    has_active_subscription=true 才渲染【Pro ✓】与【Pro unlimited】。
+  const isLoggedIn = mounted && !!localStorage.getItem("user_id");
+  const demoPro = mounted && readDemoProFlag();
+  const effectiveIsPro = demoPro || (isLoggedIn && isPro);
+
   const addLog = useCallback((msg: string) => {
     const ts = `[${new Date().toLocaleTimeString("zh-CN", { hour12: false })}] ${msg}`;
     setLogs(prev => [...prev.slice(-99), ts]);
@@ -1078,7 +1109,11 @@ export default function Home() {
       if (d && typeof d.credits === "number") {
         writeCredits(d.credits);
         setCredits(d.credits);
-        const pro = !!d.is_pro;
+        // Pro 判定仅依赖后端真库明确信号（is_pro=true / status=pro / has_active_subscription=true）
+        const pro =
+          d.is_pro === true ||
+          d.status === "pro" ||
+          d.has_active_subscription === true;
         writeProFlag(pro);
         setIsPro(pro);
       }
@@ -1208,7 +1243,8 @@ export default function Home() {
       {/* 顶部导航：isAdmin 时显式渲染【⚙️ 控制面板】入口 → /admin */}
       <Header
         isAdmin={isAdminIdentity}
-        isPro={isPro}
+        isLoggedIn={isLoggedIn}
+        isPro={effectiveIsPro}
         userLabel={
           mounted
             ? localStorage.getItem("user_email")?.split("@")[0] || t("login_title")
@@ -1237,9 +1273,11 @@ export default function Home() {
           <MealRecorder
             addLog={addLog}
             credits={credits}
-            isPro={isPro}
+            isLoggedIn={isLoggedIn}
+            isPro={effectiveIsPro}
             onSpendCredit={handleSpendCredit}
             onOpenBilling={() => setShowBilling(true)}
+            onOpenLogin={() => setShowLogin(true)}
             onWatchAd={() => setAdOpen(true)}
           />
         )}
@@ -1250,8 +1288,10 @@ export default function Home() {
       {/* 积分栏：看广告领积分（日志栏上方） */}
       <div className="credit-bar">
         <span className="credit-chip">
-          🎯 {t("credits_label")}: {credits}
-          {isPro && <span className="credit-pro-note"> · {t("credits_pro_note")}</span>}
+          🎯 {isLoggedIn
+            ? `${t("credits_label")}: ${credits}`
+            : `${t("credits_label")}: ${credits} - ${t("credits_free_trial")}`}
+          {effectiveIsPro && <span className="credit-pro-note"> · {t("credits_pro_note")}</span>}
         </span>
         <button className="ad-reward-btn" onClick={() => setAdOpen(true)}>
           📺 {t("ad_reward_btn")} (+{AD_REWARD_CREDITS})

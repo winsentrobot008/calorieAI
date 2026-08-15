@@ -20,14 +20,28 @@ export async function GET(request: NextRequest) {
   if (gateway.isConfigured()) {
     try {
       const g = await gateway.getCredits(userId);
-      return NextResponse.json({ credits: g.credits, is_pro: g.is_pro, user_id: userId, via: "gateway" });
+      return NextResponse.json({
+        credits: g.credits,
+        is_pro: g.is_pro,
+        status: g.is_pro ? "pro" : "free",
+        has_active_subscription: !!g.is_pro,
+        user_id: userId,
+        via: "gateway",
+      });
     } catch (err: any) {
       console.warn("[Credits] 网关查询失败，回退本地:", err.message);
     }
   }
   const credits = await initCreditsIfMissing(userId);
   const sub = await db.getSubscription(userId);
-  return NextResponse.json({ credits, is_pro: !!sub?.is_active, user_id: userId });
+  const isPro = !!sub?.is_active;
+  return NextResponse.json({
+    credits,
+    is_pro: isPro,
+    status: isPro ? "pro" : "free",
+    has_active_subscription: isPro,
+    user_id: userId,
+  });
 }
 
 /**
@@ -48,7 +62,14 @@ export async function POST(request: NextRequest) {
     if (gateway.isConfigured()) {
       try {
         const g = await gateway.updateCredits({ user_id: userId, delta });
-        return NextResponse.json({ credits: g.credits, is_pro: g.is_pro, user_id: userId, via: "gateway" });
+        return NextResponse.json({
+          credits: g.credits,
+          is_pro: g.is_pro,
+          status: g.is_pro ? "pro" : "free",
+          has_active_subscription: !!g.is_pro,
+          user_id: userId,
+          via: "gateway",
+        });
       } catch (err: any) {
         console.warn("[Credits] 网关写入失败，回退本地:", err.message);
       }
@@ -56,8 +77,15 @@ export async function POST(request: NextRequest) {
 
     const credits = await addServerCredits(userId, delta);
     const sub = await db.getSubscription(userId);
+    const isPro = !!sub?.is_active;
     console.log(`[Credits API] user=${userId} delta=${delta} → credits=${credits} action=${body.action || "manual"}`);
-    return NextResponse.json({ credits, is_pro: !!sub?.is_active, user_id: userId });
+    return NextResponse.json({
+      credits,
+      is_pro: isPro,
+      status: isPro ? "pro" : "free",
+      has_active_subscription: isPro,
+      user_id: userId,
+    });
   } catch (error: any) {
     console.error("[Credits API Error]", error);
     return NextResponse.json({ error: error.message || "积分同步失败" }, { status: 500 });
