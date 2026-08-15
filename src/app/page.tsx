@@ -7,6 +7,7 @@ import { t, useLocale } from "@/lib/i18n";
 import { CREDIT_PACKS, type CreditPack } from "@/lib/credit-packs";
 import { compressImageFile } from "@/lib/image-utils";
 import Header from "@/components/Header";
+import AuthModal, { type AuthSessionState } from "@/components/AuthModal";
 import {
   AdminLoginPanel,
   AdminDashboardPanel,
@@ -598,100 +599,6 @@ function Profile({ addLog }: { addLog: (msg: string) => void }) {
       <button className="submit-btn" onClick={handleSave} disabled={saving} style={{ marginTop: 12 }}>{saving ? <span className="spinner" /> : saved ? t("saved") : t("save_goal")}</button>
     </div>
   </div>);
-}
-
-// ─── Login Modal ───────────────────────────────────────────────────────
-interface AuthSessionState {
-  user_id: string;
-  email: string;
-  name?: string;
-  credits?: number;
-  is_pro?: boolean;
-}
-
-function LoginModal({
-  onClose,
-  addLog,
-  onAuthChange,
-  onLogout,
-}: {
-  onClose: () => void;
-  addLog: (msg: string) => void;
-  onAuthChange?: (session: AuthSessionState) => void;
-  onLogout?: () => void;
-}) {
-  const [mode, setMode] = useState<"login" | "register">("login");
-  const [email, setEmail] = useState(""); const [password, setPassword] = useState(""); const [name, setName] = useState("");
-  const [loading, setLoading] = useState(false); const [error, setError] = useState("");
-  // Hydration 防护: 首次渲染固定与 SSR 一致, 挂载后再读取 localStorage, 避免 React #418
-  const [hydrated, setHydrated] = useState(false);
-  useEffect(() => {
-    setHydrated(true);
-  }, []);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault(); setLoading(true); setError("");
-    try {
-      // 登录/注册走真实后端：服务端返回稳定 user_id + 权威积分/Pro 状态
-      const res = await fetch(mode === "login" ? "/api/v1/user/login" : "/api/v1/user/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, name }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || "登录失败，请稍后重试");
-
-      // 切换账号前清空旧账号/演示模式的积分、Pro、支付流水残留
-      clearUserDataCache();
-      localStorage.setItem("user_id", data.user_id);
-      localStorage.setItem("user_email", data.email || email);
-      if (data.name) localStorage.setItem("user_name", data.name);
-      // 以服务端返回的权威状态回写本地缓存
-      if (typeof data.credits === "number") writeCredits(data.credits);
-      writeProFlag(!!data.is_pro);
-      addLog(`[AUTH] 登录成功: ${data.email || email}（user_id=${data.user_id}）`);
-      onAuthChange?.({
-        user_id: data.user_id,
-        email: data.email || email,
-        name: data.name,
-        credits: data.credits,
-        is_pro: data.is_pro,
-      });
-      onClose();
-    } catch (err: any) {
-      setError(err.message || "登录失败");
-    }
-    setLoading(false);
-  };
-
-  const handleAnonymous = () => {
-    // 游客模式同样清空旧账号残留，保证匿名账号从服务端权威状态起步
-    clearUserDataCache();
-    const anonId = `anon_${Date.now()}`;
-    localStorage.setItem("user_id", anonId);
-    localStorage.removeItem("user_email");
-    addLog("[AUTH] 游客模式继续");
-    onAuthChange?.({ user_id: anonId, email: "" });
-    onClose();
-  };
-
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content login-modal" onClick={e => e.stopPropagation()}>
-        <div className="modal-header"><h2>{mode === "login" ? t("login_title") : t("login_register")}</h2><button className="modal-close" onClick={onClose}><X className="h-5 w-5" /></button></div>
-        <form onSubmit={handleSubmit} className="login-form">
-          {error && <div className="login-error">{error}</div>}
-          {mode === "register" && (<div className="form-group"><label>{t("nickname")}</label><input type="text" value={name} onChange={e => setName(e.target.value)} placeholder={t("nickname_placeholder")} className="form-input" /></div>)}
-          <div className="form-group"><label>{t("login_email")}</label><input type="email" value={email} onChange={e => setEmail(e.target.value)} required placeholder="your@email.com" className="form-input" /></div>
-          <div className="form-group"><label>{t("login_password")}</label><input type="password" value={password} onChange={e => setPassword(e.target.value)} required minLength={4} placeholder="••••••" className="form-input" /></div>
-          <button type="submit" className="btn-primary login-submit" disabled={loading}>{loading ? "..." : (mode === "login" ? t("login_title") : t("login_register"))}</button>
-        </form>
-        <div className="login-toggle"><button className="btn-link" onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); }}>{mode === "login" ? t("no_account_register") : t("have_account_login")}</button></div>
-        <div className="login-anonymous"><p>{t("login_anonymous_hint")}</p><button className="btn-secondary login-anon-btn" onClick={handleAnonymous}>{t("login_continue_anon")}</button></div>
-        {hydrated && localStorage.getItem("user_email") && (<div className="login-logout"><button className="btn-link logout-btn" onClick={() => { localStorage.removeItem("user_id"); localStorage.removeItem("user_email"); localStorage.removeItem("user_name"); clearUserDataCache(); addLog("[AUTH] 已退出登录"); onLogout?.(); onClose(); }}>{t("logout")}</button></div>)}
-      </div>
-    </div>
-  );
 }
 
 // ─── Billing Modal — Multi-Channel (Stripe 主 + PayPal 辅) ────────────
@@ -1310,7 +1217,7 @@ export default function Home() {
 
       {/* Modals */}
       {showLogin && (
-        <LoginModal
+        <AuthModal
           onClose={() => setShowLogin(false)}
           addLog={addLog}
           onAuthChange={(session) => {

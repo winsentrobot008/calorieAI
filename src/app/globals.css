@@ -541,3 +541,69 @@ body {
     -webkit-tap-highlight-color: transparent;
   }
 }
+
+/* ── Auth Modal：社交一键登录 + OTP 验证码 ── */
+.auth-social-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.auth-social-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  font-size: 13px;
+}
+.auth-social-apple {
+  background: linear-gradient(135deg, #64748b, #334155) !important;
+}
+.auth-social-icon {
+  font-size: 16px;
+  font-weight: 800;
+  color: #fff;
+}
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-dim);
+  font-size: 12px;
+  margin: 4px 0 14px;
+}
+.auth-divider::before,
+.auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--card-border);
+}
+.auth-otp-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+  text-align: center;
+}
+.auth-dev-code {
+  font-size: 12px;
+  color: #fbbf24;
+  background: #f59e0b22;
+  border-radius: 8px;
+  padding: 8px;
+  text-align: center;
+  margin-bottom: 10px;
+}
+.otp-input {
+  text-align: center;
+  font-size: 22px;
+  letter-spacing: 10px;
+  font-weight: 700;
+}
+@media (max-width: 430px) {
+  /* 移动端：社交一键登录纵向全宽，优先展示 Google / Apple */
+  .auth-social-grid {
+    grid-template-columns: 1fr;
+  }
+}
