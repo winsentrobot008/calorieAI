@@ -579,9 +579,14 @@ def main():
     parser.add_argument("--pro-demo", action="store_true",
                         help="演示 Pro 状态：向 localStorage 注入 calorieai_demo_pro=true（仅自动化演示使用，"
                              "不改变生产代码中未登录默认非 Pro 的商业逻辑）")
+    parser.add_argument("--mobile-demo", action="store_true",
+                        help="移动端自动化巡检：iPhone 13 (390x844) 触摸模拟 + 全英文 UI + "
+                             "移动支付按钮触达校验（全宽 / >=48px）+ Stripe 英文 Checkout 跳转")
     args = parser.parse_args()
     if args.promo_en:
         args.mode = "desktop"  # 宣推视频固定桌面端 16:10 画幅
+    if args.mobile_demo:
+        args.mode = "mobile"  # 移动端巡检固定 iPhone 13 390x844 触摸视口
     FAST_MODE = args.fast
     PROMO_EN = args.promo_en
     HUMAN_STEPS = 8 if args.fast else (12 if args.promo_en else 25)
@@ -594,6 +599,7 @@ def main():
         "fast": args.fast,
         "promo_en": args.promo_en,
         "pro_demo": args.pro_demo,
+        "mobile_demo": args.mobile_demo,
         "slow_mo_ms": slow_mo,
         "steps": [],
         "findings": {},
@@ -678,7 +684,8 @@ def main():
         # 全局 <canvas id="ceo-pointer-canvas">（z-index:999999!important / pointer-events:none）
         page.add_init_script(script=FX_JS)
         page.add_init_script(script=TOAST_CATCH_JS)
-        if args.promo_en:
+        if args.promo_en or args.mobile_demo:
+            # 全英文 UI：promo 宣推 / mobile 巡检均注入 en locale
             page.add_init_script(script="try { localStorage.setItem('calorieai_locale', 'en'); } catch (e) {}")
         if args.pro_demo:
             # 自动化演示 Pro 状态：显式注入本地标记；生产代码仅在读到该标记时展示 Pro
@@ -957,6 +964,64 @@ def main():
                 pause(2000)
             return f"Stripe 3 卡片展示并跳转 Checkout: {checkout_url[:80]}..."
 
+        # ── Mobile-Demo：移动端支付体验巡检（390x844 触摸 / 全英文 Stripe）──
+        def step_mobile_layout():
+            vw = page.evaluate("() => innerWidth")
+            assert 375 <= vw <= 430, f"移动端视口宽度异常: {vw}"
+            touch = page.evaluate("() => matchMedia('(pointer: coarse)').matches")
+            assert touch, "未启用触摸模拟 (pointer: coarse)"
+            upgrade_text = page.inner_text("button.btn-upgrade", timeout=6000)
+            assert "Get Pro" in upgrade_text or "Upgrade" in upgrade_text, f"移动端 Header 徽章异常: {upgrade_text}"
+            human_click(page, "button.btn-upgrade", timeout=10000)
+            page.wait_for_selector(".billing-modal", timeout=8000)
+            pause(600)
+            cards = page.query_selector_all(".billing-modal .plan-card")
+            assert len(cards) == 3, f"移动端积分包卡片数量异常: {len(cards)}"
+            modal_box = page.query_selector(".billing-modal").bounding_box()
+            assert modal_box and modal_box["width"] >= vw * 0.85, f"支付弹窗未适配移动端宽度: {modal_box}"
+            plan_btn = page.query_selector(".billing-modal .plan-btn").bounding_box()
+            assert plan_btn and plan_btn["width"] >= modal_box["width"] * 0.9, f"plan-btn 未全宽: {plan_btn}"
+            assert plan_btn["height"] >= 48, f"plan-btn 触达高度不足: {plan_btn['height']}"
+            shot("M1-mobile-layout")
+            report["findings"]["mobile_layout"] = {
+                "viewport_width": vw,
+                "touch": touch,
+                "upgrade_badge": upgrade_text,
+                "plan_btn_width": round(plan_btn["width"], 1),
+                "plan_btn_height": round(plan_btn["height"], 1),
+            }
+            return f"视口 {vw}px + 触摸已启用 + 弹窗/plan-btn 全宽({plan_btn['width']:.0f}px) 高 {plan_btn['height']:.0f}px"
+
+        def step_mobile_pay():
+            vw = page.evaluate("() => innerWidth")
+            human_click(page, ".billing-modal .plan-card .plan-btn >> nth=0", timeout=8000)
+            page.wait_for_selector(".payment-method-btn", timeout=8000)
+            human_click(page, ".payment-method-btn:has-text('Credit / Debit Card')", timeout=8000)
+            page.wait_for_selector(".stripe-pay-btn", timeout=8000)
+            pause(500)
+            pay_btn = page.query_selector(".stripe-pay-btn").bounding_box()
+            modal_box = page.query_selector(".billing-modal").bounding_box()
+            assert pay_btn and pay_btn["height"] >= 48, f"stripe-pay-btn 触达高度不足: {pay_btn}"
+            assert pay_btn["width"] >= modal_box["width"] * 0.9, f"stripe-pay-btn 未全宽: {pay_btn}"
+            shot("M2-mobile-pay")
+            human_click(page, ".stripe-pay-btn", timeout=10000)
+            checkout_url = wait_url_part("checkout.stripe.com", timeout=45)
+            if not checkout_url:
+                raise AssertionError("未跳转到 Stripe Checkout")
+            # 全英文校验：Stripe Checkout 页面 <html lang="en">
+            page.wait_for_selector("body", timeout=20000)
+            pause(1500)
+            lang = page.evaluate("() => document.documentElement.lang || ''")
+            assert lang.lower().startswith("en"), f"Stripe Checkout 非英文: lang={lang}"
+            shot("M3-mobile-stripe-en")
+            report["findings"]["mobile_billing"] = {
+                "viewport_width": vw,
+                "stripe_pay_btn_height": round(pay_btn["height"], 1),
+                "checkout_url": checkout_url,
+                "stripe_lang": lang,
+            }
+            return f"Stripe Checkout 跳转成功（英文 lang={lang}）: {checkout_url[:70]}..."
+
         # ── Promo-EN：YouTube Shorts 英文宣推流程（全英文 UI + 4 段美音解说）──
         def run_promo_en(audio_paths):
             wav_map = {}
@@ -1171,6 +1236,9 @@ def main():
 
         if args.promo_en:
             promo = run_promo_en(promo_audio_paths)
+        elif args.mobile_demo:
+            step("步骤M-a 移动端响应式布局与触摸", step_mobile_layout)
+            step("步骤M-b 移动支付按钮触达 + 全英文 Stripe Checkout", step_mobile_pay)
         else:
             step("步骤A 多语言与导航", step_a)
             step("步骤B 餐次全覆盖", step_b)

@@ -500,3 +500,44 @@ body {
   cursor: pointer; transition: all .2s; white-space: nowrap;
 }
 .btn-login:hover { border-color: #60a5fa; color: #60a5fa; }
+
+/* ── 移动端支付体验（375px~430px：iPhone / Android 触屏）──────────────
+   支付弹窗/按钮在手机屏幕下：水平居中、顶部对齐、全宽、触达高度 >=48px，
+   并适配 iOS/Android 触摸手势（禁用双击缩放延迟、点按高亮反馈）。 */
+@media (max-width: 430px) {
+  .modal-overlay {
+    align-items: flex-start;
+    justify-content: center;
+    padding: 20px 12px;
+  }
+  .modal-content {
+    max-height: 92vh;
+    padding: 18px 14px;
+  }
+  .plan-grid {
+    gap: 10px;
+  }
+  .btn-primary,
+  .plan-btn,
+  .stripe-pay-btn,
+  .payment-method-btn,
+  .submit-btn {
+    min-height: 48px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .stripe-pay-btn {
+    height: 48px !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .payment-method-btn {
+    padding: 12px 6px;
+  }
+  .btn-upgrade {
+    min-height: 32px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+}

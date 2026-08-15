@@ -181,7 +181,18 @@ export async function POST(request: NextRequest) {
     // ── 构建 Checkout Session ──────────────────────────
     const sessionParams: any = {
       payment_method_types: paymentMethodTypes,
+      // 强制全英文支付页：无论用户浏览器/地区语言如何，Stripe Checkout 一律展示英文
+      locale: "en",
       mode: "payment",
+      // Apple Pay / Google Pay 自动识别：
+      // 当 payment_method_types 包含 "card" 且用户设备钱包支持时，
+      // Stripe Checkout 会自动展示 Apple Pay / Google Pay 快捷支付按钮，
+      // 无需额外 payment_method_types 项，显著降低手机端输入成本。
+      payment_method_options: {
+        card: {
+          request_three_d_secure: "automatic",
+        },
+      },
       line_items: [
         {
           price_data: {
