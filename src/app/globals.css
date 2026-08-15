@@ -607,3 +607,155 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Cal AI Style：Onboarding / 识别拆解微调 / 今日仪表盘 ── */
+.onboarding-overlay {
+  z-index: 2000;
+}
+.onboarding-card {
+  max-width: 420px;
+}
+.onboarding-progress {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 18px;
+}
+.onboarding-dot {
+  width: 34px;
+  height: 6px;
+  border-radius: 99px;
+  background: #1e293b;
+  transition: background .2s;
+}
+.onboarding-dot.active {
+  background: linear-gradient(90deg, var(--accent-from), var(--accent-to));
+}
+.onboarding-step {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.onboarding-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.onboarding-hint {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.onboarding-options {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.onboarding-options-col {
+  grid-template-columns: 1fr;
+}
+.onboarding-option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 52px;
+  border-radius: 12px;
+  border: 1px solid var(--card-border);
+  background: var(--input-bg);
+  color: var(--text-bright);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .2s;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.onboarding-option.active {
+  border-color: var(--accent-from);
+  background: #f59e0b22;
+  color: #fbbf24;
+}
+.onboarding-option-icon {
+  font-size: 20px;
+}
+.onboarding-meta-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.onboarding-input {
+  font-size: 18px;
+  font-weight: 700;
+  text-align: center;
+}
+.onboarding-cal-input {
+  font-size: 28px;
+  padding: 14px;
+}
+.onboarding-recommended {
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.onboarding-recommended b {
+  color: #fbbf24;
+}
+.onboarding-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+.onboarding-btn {
+  flex: 1;
+  min-height: 48px;
+}
+.onboarding-btn-primary {
+  flex: 2;
+}
+.qty-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  border: 1px solid #475569;
+  background: #1e293b;
+  color: #fbbf24;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.meal-save-btn {
+  width: 100%;
+  margin-top: 10px;
+  min-height: 48px;
+  background: linear-gradient(135deg, #34d399, #10b981) !important;
+}
+.dashboard-empty {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+}
+.dashboard-meal-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--card-border);
+}
+.dashboard-meal-item:last-of-type {
+  border-bottom: none;
+}
+.dashboard-capture-btn {
+  width: 100%;
+  min-height: 48px;
+  margin-top: 10px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+}
+@media (max-width: 430px) {
+  .qty-btn {
+    width: 40px;
+    height: 48px;
+  }
+}

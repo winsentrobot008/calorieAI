@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
 import { Mic, X } from "lucide-react";
 import { t, useLocale } from "@/lib/i18n";
@@ -8,11 +8,29 @@ import { CREDIT_PACKS, type CreditPack } from "@/lib/credit-packs";
 import { compressImageFile } from "@/lib/image-utils";
 import Header from "@/components/Header";
 import AuthModal, { type AuthSessionState } from "@/components/AuthModal";
+import Onboarding from "@/components/Onboarding";
 import {
   AdminLoginPanel,
   AdminDashboardPanel,
 } from "@/components/admin/admin-panel";
 import { isAdminIdentity as checkAdminIdentity } from "@/lib/admin-identity";
+import {
+  getProfile,
+  saveProfile,
+  isOnboarded,
+  DEFAULT_DAILY_CALORIES,
+  type UserProfile,
+  type Gender,
+  type WeightGoal,
+} from "@/lib/profile-store";
+import {
+  addMealEntry,
+  getTodayEntries,
+  getTodayTotals,
+  entriesByMeal,
+  type MealType,
+  type MealEntry,
+} from "@/lib/meal-log-store";
 import {
   readCredits,
   writeCredits,
@@ -241,6 +259,9 @@ function MealRecorder({
   credits,
   isLoggedIn,
   isPro,
+  mealType,
+  onMealTypeChange,
+  onMealSaved,
   onSpendCredit,
   onOpenBilling,
   onOpenLogin,
@@ -250,17 +271,21 @@ function MealRecorder({
   credits: number;
   isLoggedIn: boolean;
   isPro: boolean;
+  mealType: MealType;
+  onMealTypeChange: (m: MealType) => void;
+  onMealSaved?: () => void;
   onSpendCredit: () => void;
   onOpenBilling: () => void;
   onOpenLogin: () => void;
   onWatchAd: () => void;
 }) {
-  const [mealType, setMealType] = useState("breakfast");
   const [mode, setMode] = useState<"image" | "text">("image");
   const [text, setText] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [result, setResult] = useState<typeof MOCK_FOODS | null>(null);
   const [summary, setSummary] = useState<{ totalKcal: number; totalProtein: number; totalFat: number; totalCarbs: number } | null>(null);
+  const [editedGrams, setEditedGrams] = useState<Record<number, number>>({});
+  const [savedLog, setSavedLog] = useState(false);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -275,6 +300,65 @@ function MealRecorder({
     setToastMsg(msg);
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToastMsg(null), 3500);
+  };
+
+  // 按用户微调后的克数等比缩放营养素（Cal AI Meal Scan 微调）
+  const scaledItem = (rec: any, i: number) => {
+    const grams = editedGrams[i] ?? rec?.grams ?? 0;
+    const scale = rec?.grams > 0 ? grams / rec.grams : 1;
+    return {
+      name: rec?.food || rec?.food_en || "Food",
+      grams,
+      calories: (rec?.calories || 0) * scale,
+      protein_g: (rec?.protein_g || 0) * scale,
+      fat_g: (rec?.fat_g || 0) * scale,
+      carbs_g: (rec?.carbs_g || 0) * scale,
+    };
+  };
+
+  const scaledTotals = () => {
+    if (!result || !result.length) return { totalKcal: 0, totalProtein: 0, totalFat: 0, totalCarbs: 0 };
+    return result.reduce(
+      (acc, rec, i) => {
+        const s = scaledItem(rec, i);
+        return {
+          totalKcal: acc.totalKcal + s.calories,
+          totalProtein: acc.totalProtein + s.protein_g,
+          totalFat: acc.totalFat + s.fat_g,
+          totalCarbs: acc.totalCarbs + s.carbs_g,
+        };
+      },
+      { totalKcal: 0, totalProtein: 0, totalFat: 0, totalCarbs: 0 }
+    );
+  };
+
+  const adjustGrams = (i: number, delta: number) => {
+    setEditedGrams((prev) => {
+      const base = result?.[i]?.grams || 0;
+      const cur = prev[i] ?? base;
+      const next = Math.max(5, Math.round((cur + delta) / 5) * 5);
+      return { ...prev, [i]: next };
+    });
+  };
+
+  // Save to Log：保存今日餐食记录（早餐/午餐/晚餐/加餐）
+  const handleSaveToLog = () => {
+    if (!result?.length) return;
+    const items = result.map((rec, i) => scaledItem(rec, i));
+    const total = scaledTotals();
+    addMealEntry({
+      mealType,
+      items,
+      totalKcal: total.totalKcal,
+      totalProtein: total.totalProtein,
+      totalFat: total.totalFat,
+      totalCarbs: total.totalCarbs,
+    });
+    setSavedLog(true);
+    setTimeout(() => setSavedLog(false), 2500);
+    const mealLabel = t(MEAL_TYPES.find((m) => m.value === mealType)?.labelKey || "meal_type_snack");
+    addLog(`[LOG] 已保存到 ${mealLabel}（${total.totalKcal.toFixed(0)} kcal）`);
+    onMealSaved?.();
   };
 
   // 仅做本地预览，不触发任何 AI API 请求（API 降本：禁用自动识图）
@@ -424,7 +508,7 @@ function MealRecorder({
         </div>
       )}
       <div className="card"><div className="card-title">{t("select_meal_type")}</div>
-        <div className="meal-type-row">{MEAL_TYPES.map(mt => (<button key={mt.value} className={`meal-type-btn ${mealType === mt.value ? "active" : ""}`} onClick={() => setMealType(mt.value)}>{t(mt.labelKey)}</button>))}</div>
+        <div className="meal-type-row">{MEAL_TYPES.map(mt => (<button key={mt.value} className={`meal-type-btn ${mealType === mt.value ? "active" : ""}`} onClick={() => onMealTypeChange(mt.value as MealType)}>{t(mt.labelKey)}</button>))}</div>
       </div>
       <div className="card"><div className="card-title">{t("select_input_mode")}</div>
         <div className="tab-bar" style={{ margin: 0 }}>
@@ -453,38 +537,43 @@ function MealRecorder({
         </button>
       </div>)}
       {result && result.length > 0 && (<div className="card"><div className="card-title">{t("recognition_result")}</div>
-        {summary && (
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center", marginBottom: 10, fontSize: 13, fontWeight: 600 }}>
-            <span style={{ color: "#fbbf24" }}>🔥 {summary.totalKcal.toFixed(0)} kcal</span>
-            <span style={{ color: "#60a5fa" }}>P {summary.totalProtein.toFixed(0)}g</span>
-            <span style={{ color: "#34d399" }}>F {summary.totalFat.toFixed(0)}g</span>
-            <span style={{ color: "#f472b6" }}>C {summary.totalCarbs.toFixed(0)}g</span>
-          </div>
-        )}
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center", marginBottom: 10, fontSize: 13, fontWeight: 600 }}>
+          <span style={{ color: "#fbbf24" }}>🔥 {scaledTotals().totalKcal.toFixed(0)} kcal</span>
+          <span style={{ color: "#60a5fa" }}>P {scaledTotals().totalProtein.toFixed(0)}g</span>
+          <span style={{ color: "#34d399" }}>F {scaledTotals().totalFat.toFixed(0)}g</span>
+          <span style={{ color: "#f472b6" }}>C {scaledTotals().totalCarbs.toFixed(0)}g</span>
+        </div>
         {result.map((rec, i) => (<div key={i}>
           <div className="food-item clickable" onClick={() => setExpandedIdx(expandedIdx === i ? null : i)}>
             <div style={{ flex: 1 }}>
               <div className="food-name">{rec.food}</div>
               {rec.food_en && <div className="food-name-en">{rec.food_en}</div>}
-              <div className="food-grams">{rec.grams}g</div>
+              <div className="food-grams" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <button className="qty-btn" onClick={(e) => { e.stopPropagation(); adjustGrams(i, -10); }} aria-label="-10g">−</button>
+                <span>{scaledItem(rec, i).grams.toFixed(0)}g</span>
+                <button className="qty-btn" onClick={(e) => { e.stopPropagation(); adjustGrams(i, 10); }} aria-label="+10g">+</button>
+              </div>
               {rec.confidence != null && (<div className="confidence-row"><div className="confidence-bar-bg"><div className="confidence-bar-fill" style={{ width: `${Math.round(rec.confidence * 100)}%` }} /></div><span className="confidence-label">{Math.round(rec.confidence * 100)}%</span></div>)}
             </div>
-            <div className="food-nutrition"><div className="food-cal">{rec.calories} kcal</div><div className="food-macro">P{rec.protein_g} · F{rec.fat_g} · C{rec.carbs_g}</div></div>
+            <div className="food-nutrition"><div className="food-cal">{scaledItem(rec, i).calories.toFixed(0)} kcal</div><div className="food-macro">P{scaledItem(rec, i).protein_g.toFixed(0)} · F{scaledItem(rec, i).fat_g.toFixed(0)} · C{scaledItem(rec, i).carbs_g.toFixed(0)}</div></div>
           </div>
           {expandedIdx === i && (<div className="food-detail"><div className="detail-grid">
-            <div className="detail-item"><span className="detail-label">{t("detail_protein")}</span><span className="detail-value">{rec.protein_g}g</span></div>
-            <div className="detail-item"><span className="detail-label">{t("detail_fat")}</span><span className="detail-value">{rec.fat_g}g</span></div>
-            <div className="detail-item"><span className="detail-label">{t("detail_carbs")}</span><span className="detail-value">{rec.carbs_g}g</span></div>
-            <div className="detail-item"><span className="detail-label">{t("detail_grams")}</span><span className="detail-value">{rec.grams}g</span></div>
+            <div className="detail-item"><span className="detail-label">{t("detail_protein")}</span><span className="detail-value">{scaledItem(rec, i).protein_g.toFixed(0)}g</span></div>
+            <div className="detail-item"><span className="detail-label">{t("detail_fat")}</span><span className="detail-value">{scaledItem(rec, i).fat_g.toFixed(0)}g</span></div>
+            <div className="detail-item"><span className="detail-label">{t("detail_carbs")}</span><span className="detail-value">{scaledItem(rec, i).carbs_g.toFixed(0)}g</span></div>
+            <div className="detail-item"><span className="detail-label">{t("detail_grams")}</span><span className="detail-value">{scaledItem(rec, i).grams.toFixed(0)}g</span></div>
           </div></div>)}
         </div>))}
         <div className="food-item" style={{ borderBottom: "none", marginTop: 4 }}>
           <div className="food-name">{t("total")}</div>
           <div className="food-nutrition">
-            <div className="food-cal">{result.reduce((s, r) => s + r.calories, 0).toFixed(0)} kcal</div>
-            <div className="food-macro">P{result.reduce((s, r) => s + r.protein_g, 0).toFixed(1)} · F{result.reduce((s, r) => s + r.fat_g, 0).toFixed(1)} · C{result.reduce((s, r) => s + r.carbs_g, 0).toFixed(1)}</div>
+            <div className="food-cal">{scaledTotals().totalKcal.toFixed(0)} kcal</div>
+            <div className="food-macro">P{scaledTotals().totalProtein.toFixed(1)} · F{scaledTotals().totalFat.toFixed(1)} · C{scaledTotals().totalCarbs.toFixed(1)}</div>
           </div>
         </div>
+        <button className="btn-primary meal-save-btn" onClick={handleSaveToLog}>
+          {savedLog ? `✓ ${t("saved_to_log")}` : `💾 ${t("save_to_log")}`}
+        </button>
       </div>)}
 
       {/* 积分不足拦截弹窗 */}
@@ -530,75 +619,189 @@ function MealRecorder({
   );
 }
 
-// ─── Daily Dashboard ───────────────────────────────────────────────────
-function DailyDashboard() {
-  const s = MOCK_STATS.stats; const g = MOCK_STATS.goals;
-  return (<div>
-    <div className="card" style={{ padding: "10px 16px", textAlign: "center" }}><span style={{ fontSize: 12, color: "#64748b" }}>2026-07-24</span></div>
-    <div className="card" style={{ display: "flex", justifyContent: "center" }}><CalCircle calories={s.calories} target={g.daily_calories || 2000} /></div>
-    <div className="card"><div className="card-title">{t("nutrition_detail")}</div>
-      <StatBar label={t("detail_protein")} current={s.protein_g} target={g.daily_protein || 60} unit="g" color="#34d399" />
-      <StatBar label={t("detail_fat")} current={s.fat_g} target={g.daily_fat || 65} unit="g" color="#60a5fa" />
-      <StatBar label={t("detail_carbs")} current={s.carbs_g} target={g.daily_carbs || 300} unit="g" color="#fbbf24" />
-      {s.meal_count > 0 && <div style={{ textAlign: "center", marginTop: 8, fontSize: 11, color: "#64748b" }}>{t("total_meal_records", { count: s.meal_count })}</div>}
+// ─── Daily Dashboard（Cal AI Style：环形进度 + 餐食卡片 + 快捷补拍）───
+const MEAL_SECTIONS: { id: MealType; icon: string; labelKey: string }[] = [
+  { id: "breakfast", icon: "🌅", labelKey: "meal_type_breakfast" },
+  { id: "lunch", icon: "☀️", labelKey: "meal_type_lunch" },
+  { id: "dinner", icon: "🌙", labelKey: "meal_type_dinner" },
+  { id: "snack", icon: "🍎", labelKey: "meal_type_snack" },
+];
+
+function DailyDashboard({
+  totals,
+  goalCalories,
+  entries,
+  onQuickCapture,
+}: {
+  totals: { kcal: number; protein: number; fat: number; carbs: number };
+  goalCalories: number;
+  entries: MealEntry[];
+  onQuickCapture: (mealType: MealType) => void;
+}) {
+  const byMeal = entriesByMeal(entries);
+  const remaining = Math.max(0, goalCalories - totals.kcal);
+  return (
+    <div>
+      <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+        <CalCircle calories={totals.kcal} target={goalCalories} />
+        <div style={{ marginTop: 8, fontSize: 13, color: "#94a3b8" }}>
+          {t("dashboard_remaining", { kcal: remaining.toFixed(0) })}
+        </div>
+        <div style={{ display: "flex", gap: 12, marginTop: 6, fontSize: 11, color: "#64748b" }}>
+          <span>P {totals.protein.toFixed(0)}g</span>
+          <span>F {totals.fat.toFixed(0)}g</span>
+          <span>C {totals.carbs.toFixed(0)}g</span>
+        </div>
+      </div>
+      {MEAL_SECTIONS.map((section) => {
+        const list = byMeal[section.id];
+        return (
+          <div key={section.id} className="card">
+            <div className="card-title">
+              {section.icon} {t(section.labelKey)}
+            </div>
+            {list.length === 0 && <p className="dashboard-empty">{t("dashboard_no_meals")}</p>}
+            {list.map((entry) => (
+              <div key={entry.id} className="dashboard-meal-item">
+                <div>
+                  <div className="food-name">{entry.items[0]?.name || t("meal_logged")}</div>
+                  <div className="food-grams">
+                    {entry.items.length} {t("food_items")} · {entry.ts.slice(11, 16)}
+                  </div>
+                </div>
+                <div className="food-nutrition">
+                  <div className="food-cal">{entry.totalKcal.toFixed(0)} kcal</div>
+                  <div className="food-macro">
+                    P{entry.totalProtein.toFixed(0)} · F{entry.totalFat.toFixed(0)} · C{entry.totalCarbs.toFixed(0)}
+                  </div>
+                </div>
+              </div>
+            ))}
+            <button
+              className="btn-primary dashboard-capture-btn"
+              onClick={() => onQuickCapture(section.id)}
+            >
+              📷 {t("dashboard_capture")}
+            </button>
+          </div>
+        );
+      })}
     </div>
-    <MealDistribution trendDays={MOCK_TREND_DAYS} />
-    <TrendChart />
-    <div className="card"><div className="card-title">{t("ai_suggestions")}</div>
-      {MOCK_SUGGESTIONS.map((sg, i) => (<div key={i} className="suggestion-card"><span className="suggestion-icon">{sg.icon}</span><div><div className="suggestion-title">{sg.title}</div><div className="suggestion-detail">{sg.detail}</div></div></div>))}
-    </div>
-  </div>);
+  );
 }
 
 // ─── Profile ───────────────────────────────────────────────────────────
-function Profile({ addLog }: { addLog: (msg: string) => void }) {
+function Profile({
+  addLog,
+  onProfileSaved,
+}: {
+  addLog: (msg: string) => void;
+  onProfileSaved?: () => void;
+}) {
   const [userId, setUserId] = useState("anonymous");
   const [name, setName] = useState("");
-  const [goalType, setGoalType] = useState("maintain");
-  const [dailyCalories, setDailyCalories] = useState(2000);
-  const [dailyProtein, setDailyProtein] = useState(60);
-  const [dailyFat, setDailyFat] = useState(65);
-  const [dailyCarbs, setDailyCarbs] = useState(300);
+  const [gender, setGender] = useState<Gender>("other");
+  const [weightKg, setWeightKg] = useState("70");
+  const [heightCm, setHeightCm] = useState("170");
+  const [age, setAge] = useState("30");
+  const [goalType, setGoalType] = useState<WeightGoal>("maintain");
+  const [dailyCalories, setDailyCalories] = useState(DEFAULT_DAILY_CALORIES);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     const uid = typeof window !== "undefined" ? localStorage.getItem("user_id") || "anonymous" : "anonymous";
     setUserId(uid);
-    fetch(`${API}/v1/user/profile?user_id=${uid}`)
-      .then(r => r.ok && r.json()).then(data => { if (data?.user) { const u = data.user; setName(u.name || ""); setGoalType(u.goal_type || "maintain"); setDailyCalories(u.daily_calories || 2000); setDailyProtein(u.daily_protein || 60); setDailyFat(u.daily_fat || 65); setDailyCarbs(u.daily_carbs || 300); } }).catch(() => {});
+    setName(typeof window !== "undefined" ? localStorage.getItem("user_name") || "" : "");
+    const p = getProfile();
+    if (p) {
+      setGender(p.gender);
+      setWeightKg(String(p.weightKg));
+      setHeightCm(p.heightCm ? String(p.heightCm) : "170");
+      setAge(p.age ? String(p.age) : "30");
+      setGoalType(p.goal);
+      setDailyCalories(p.dailyCalories);
+    }
   }, []);
 
-  const handleSave = async () => {
-    setSaving(true); setSaved(false);
-    await new Promise(r => setTimeout(r, 500));
-    setSaved(true); addLog("[SUCCESS] 目标已保存");
-    setTimeout(() => setSaved(false), 2000);
+  const handleSave = () => {
+    setSaving(true);
+    setSaved(false);
+    const p = saveProfile({
+      gender,
+      weightKg: Number(weightKg) || 70,
+      heightCm: Number(heightCm) || undefined,
+      age: Number(age) || undefined,
+      goal: goalType,
+      dailyCalories: Math.max(1200, Number(dailyCalories) || DEFAULT_DAILY_CALORIES),
+    });
+    if (name) localStorage.setItem("user_name", name);
+    addLog(`[PROFILE] 目标已保存：${p.dailyCalories} kcal/日`);
+    onProfileSaved?.();
+    setSaved(true);
     setSaving(false);
+    setTimeout(() => setSaved(false), 2000);
   };
 
-  return (<div>
-    <div className="card"><div className="card-title">{t("user_info")}</div>
-      <div className="form-group"><label className="form-label">{t("nickname")}</label><input className="form-input" value={name} onChange={e => setName(e.target.value)} placeholder={t("nickname_placeholder")} /></div>
-      <div className="form-group"><label className="form-label">{t("user_id_label")}</label><input className="form-input" value={userId} disabled style={{ opacity: 0.6 }} /></div>
-    </div>
-    <div className="card"><div className="card-title">{t("daily_goals")}</div>
-      <div className="form-group"><label className="form-label">{t("goal_type")}</label>
-        <div className="goal-type-row">
-          {[{ value: "lose", labelKey: "goal_lose" }, { value: "maintain", labelKey: "goal_maintain" }, { value: "gain", labelKey: "goal_gain" }].map(opt => (
-            <button key={opt.value} className={`goal-btn ${goalType === opt.value ? "active" : ""}`} onClick={() => setGoalType(opt.value)}>{t(opt.labelKey)}</button>
-          ))}
+  return (
+    <div>
+      <div className="card">
+        <div className="card-title">{t("user_info")}</div>
+        <div className="form-group">
+          <label className="form-label">{t("nickname")}</label>
+          <input className="form-input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("nickname_placeholder")} />
+        </div>
+        <div className="form-group">
+          <label className="form-label">{t("user_id_label")}</label>
+          <input className="form-input" value={userId} disabled style={{ opacity: 0.6 }} />
         </div>
       </div>
-      <div className="form-group"><label className="form-label">{t("daily_calorie_target")}</label><input className="form-input" type="number" value={dailyCalories} onChange={e => setDailyCalories(Number(e.target.value))} min={500} max={10000} /></div>
-      <div className="macro-grid">
-        <div className="form-group"><label className="form-label" style={{ color: "#34d399" }}>{t("detail_protein")} (g)</label><input className="form-input" type="number" value={dailyProtein} onChange={e => setDailyProtein(Number(e.target.value))} min={0} /></div>
-        <div className="form-group"><label className="form-label" style={{ color: "#60a5fa" }}>{t("detail_fat")} (g)</label><input className="form-input" type="number" value={dailyFat} onChange={e => setDailyFat(Number(e.target.value))} min={0} /></div>
-        <div className="form-group"><label className="form-label" style={{ color: "#fbbf24" }}>{t("detail_carbs")} (g)</label><input className="form-input" type="number" value={dailyCarbs} onChange={e => setDailyCarbs(Number(e.target.value))} min={0} /></div>
+      <div className="card">
+        <div className="card-title">{t("onboarding_title")}</div>
+        <div className="form-group">
+          <label className="form-label">{t("onboarding_gender")}</label>
+          <div className="goal-type-row">
+            {(["female", "male", "other"] as Gender[]).map((g) => (
+              <button key={g} className={`goal-btn ${gender === g ? "active" : ""}`} onClick={() => setGender(g)}>
+                {t(`onboarding_gender_${g}`)}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="macro-grid">
+          <div className="form-group">
+            <label className="form-label">{t("onboarding_weight")} (kg)</label>
+            <input className="form-input" type="number" inputMode="decimal" value={weightKg} onChange={(e) => setWeightKg(e.target.value)} min={30} max={300} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">{t("onboarding_height")} (cm)</label>
+            <input className="form-input" type="number" inputMode="decimal" value={heightCm} onChange={(e) => setHeightCm(e.target.value)} min={120} max={230} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">{t("onboarding_age")}</label>
+            <input className="form-input" type="number" inputMode="numeric" value={age} onChange={(e) => setAge(e.target.value)} min={14} max={90} />
+          </div>
+        </div>
+        <div className="form-group">
+          <label className="form-label">{t("goal_type")}</label>
+          <div className="goal-type-row">
+            {([{ value: "lose" }, { value: "maintain" }, { value: "gain" }] as { value: WeightGoal }[]).map((opt) => (
+              <button key={opt.value} className={`goal-btn ${goalType === opt.value ? "active" : ""}`} onClick={() => setGoalType(opt.value)}>
+                {t(`goal_${opt.value}`)}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="form-group">
+          <label className="form-label">{t("daily_calorie_target")}</label>
+          <input className="form-input" type="number" inputMode="numeric" value={dailyCalories} onChange={(e) => setDailyCalories(Number(e.target.value))} min={1200} max={6000} />
+        </div>
+        <button className="submit-btn" onClick={handleSave} disabled={saving} style={{ marginTop: 12 }}>
+          {saving ? <span className="spinner" /> : saved ? t("saved") : t("save_goal")}
+        </button>
       </div>
-      <button className="submit-btn" onClick={handleSave} disabled={saving} style={{ marginTop: 12 }}>{saving ? <span className="spinner" /> : saved ? t("saved") : t("save_goal")}</button>
     </div>
-  </div>);
+  );
 }
 
 // ─── Billing Modal — Multi-Channel (Stripe 主 + PayPal 辅) ────────────
@@ -976,6 +1179,10 @@ export default function Home() {
   const [isPro, setIsPro] = useState(false);
   const [credits, setCredits] = useState(DEFAULT_CREDITS);
   const [adOpen, setAdOpen] = useState(false);
+  const [mealType, setMealType] = useState<MealType>("breakfast");
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [mealLogTick, setMealLogTick] = useState(0);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
 
   // 管理后台入口鉴权（防攻击保障）：
   // 统一判定（lib/admin-identity）：内置 winsentrobot / winsentrobot008 特权账号 +
@@ -1030,6 +1237,11 @@ export default function Home() {
     }
   }, []);
 
+  // 今日餐食数据（Save to Log 后通过 mealLogTick 触发刷新）
+  const todayTotals = useMemo(() => getTodayTotals(), [mealLogTick]);
+  const todayEntries = useMemo(() => getTodayEntries(), [mealLogTick]);
+  const goalCalories = profile?.dailyCalories || DEFAULT_DAILY_CALORIES;
+
   // Handle admin login
   const handleAdminLogin = (s: any) => {
     sessionStorage.setItem("admin_session", JSON.stringify(s));
@@ -1051,6 +1263,11 @@ export default function Home() {
   useEffect(() => {
     setMounted(true);
     setCredits(readCredits());
+    setProfile(getProfile());
+    // 首次登录（已完成 Sign In 且未完成 Onboarding）→ 弹出 3 步设置
+    if (!!localStorage.getItem("user_id") && !isOnboarded()) {
+      setOnboardingOpen(true);
+    }
     // 冷启动 / 刷新页面：强制从服务端真库拉取最新积分与 Pro 状态
     syncFromServer();
     // 访问量 / IP 监控上报（best-effort）
@@ -1176,20 +1393,35 @@ export default function Home() {
 
       {/* Content */}
       <main className="content">
-        {tab === "record" && (
-          <MealRecorder
-            addLog={addLog}
-            credits={credits}
-            isLoggedIn={isLoggedIn}
-            isPro={effectiveIsPro}
-            onSpendCredit={handleSpendCredit}
-            onOpenBilling={() => setShowBilling(true)}
-            onOpenLogin={() => setShowLogin(true)}
-            onWatchAd={() => setAdOpen(true)}
-          />
-        )}
-        {tab === "dashboard" && <DailyDashboard />}
-        {tab === "profile" && <Profile addLog={addLog} />}
+          {tab === "record" && (
+            <MealRecorder
+              addLog={addLog}
+              credits={credits}
+              isLoggedIn={isLoggedIn}
+              isPro={effectiveIsPro}
+              mealType={mealType}
+              onMealTypeChange={setMealType}
+              onMealSaved={() => setMealLogTick((t) => t + 1)}
+              onSpendCredit={handleSpendCredit}
+              onOpenBilling={() => setShowBilling(true)}
+              onOpenLogin={() => setShowLogin(true)}
+              onWatchAd={() => setAdOpen(true)}
+            />
+          )}
+          {tab === "dashboard" && (
+            <DailyDashboard
+              totals={todayTotals}
+              goalCalories={goalCalories}
+              entries={todayEntries}
+              onQuickCapture={(mt) => {
+                setMealType(mt);
+                setTab("record");
+              }}
+            />
+          )}
+          {tab === "profile" && (
+            <Profile addLog={addLog} onProfileSaved={() => setProfile(getProfile())} />
+          )}
       </main>
 
       {/* 积分栏：看广告领积分（日志栏上方） */}
@@ -1230,13 +1462,28 @@ export default function Home() {
             writeProFlag(pro);
             setIsPro(pro);
             syncFromServer(session.user_id);
+            // 首次登录 → 引导 3 步 Onboarding（性别/体重目标/卡路里目标）
+            setProfile(getProfile());
+            if (!isOnboarded()) setOnboardingOpen(true);
           }}
           onLogout={() => {
             // 退出：清空本地状态缓存，恢复匿名账号的服务端权威状态
             setIsPro(false);
             setCredits(DEFAULT_CREDITS);
+            setProfile(null);
+            setOnboardingOpen(false);
             syncFromServer();
           }}
+        />
+      )}
+      {onboardingOpen && (
+        <Onboarding
+          onComplete={() => {
+            setOnboardingOpen(false);
+            setProfile(getProfile());
+            addLog("[ONBOARDING] 3 步设置完成，开始记录饮食");
+          }}
+          onSkip={() => setOnboardingOpen(false)}
         />
       )}
       {showBilling && (
