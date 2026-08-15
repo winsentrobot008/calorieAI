@@ -51,6 +51,11 @@ next-env.d.ts
 # CEO visual demo artifacts (screenshots + JSON reports)
 /qa-logs/
 
+# Playwright E2E artifacts
+/test-results/
+/playwright-report/
+/blob-report/
+
 # python caches
 __pycache__/
 

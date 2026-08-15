@@ -10,6 +10,8 @@
   "food_items": "种食材",
   "save_to_log": "Save to Log",
   "saved_to_log": "已保存到今日记录",
+  "paywall_redirecting": "免费次数已用完，正在跳转 Pro 订阅…",
+  "paywall_mock": "演示模式：未配置 Stripe 密钥，已跳过订阅",
   "onboarding_title": "完善你的个人目标",
   "onboarding_skip": "跳过",
   "onboarding_next": "下一步",

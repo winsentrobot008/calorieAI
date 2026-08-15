@@ -32,6 +32,12 @@ import {
   type MealEntry,
 } from "@/lib/meal-log-store";
 import {
+  getScanCount,
+  incrementScanCount,
+  resetScanCount,
+  FREE_SCAN_LIMIT,
+} from "@/lib/scan-limit";
+import {
   readCredits,
   writeCredits,
   writeProFlag,
@@ -341,6 +347,36 @@ function MealRecorder({
     });
   };
 
+  const getUserId = () =>
+    typeof window !== "undefined" ? localStorage.getItem("user_id") || "anonymous" : "anonymous";
+  const getUserEmail = () =>
+    typeof window !== "undefined" ? localStorage.getItem("user_email") || "" : "";
+
+  // Cal AI Paywall：免费次数用完后创建 $9.99/月 全英文 Stripe 订阅并跳转
+  const handlePaywall = async () => {
+    showToast(t("paywall_redirecting"));
+    addLog("[PAYWALL] 正在创建 $9.99/月 Pro 订阅会话（locale=en）...");
+    try {
+      const res = await fetch("/api/stripe/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: getUserId(), email: getUserEmail() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "订阅创建失败");
+      if (data.mock) {
+        showToast(data.message || t("paywall_mock"));
+        addLog(`[PAYWALL] ${data.message || "演示模式，跳过订阅"}`);
+        return;
+      }
+      addLog("[PAYWALL] 已进入 Stripe 订阅收银台（$9.99/mo · English）");
+      window.location.href = data.url;
+    } catch (err: any) {
+      showToast(`❌ ${err.message || "订阅创建失败"}`);
+      addLog(`[PAYWALL] 订阅创建失败: ${err.message || ""}`);
+    }
+  };
+
   // Save to Log：保存今日餐食记录（早餐/午餐/晚餐/加餐）
   const handleSaveToLog = () => {
     if (!result?.length) return;
@@ -379,6 +415,13 @@ function MealRecorder({
   // 手动触发识图：仅在用户点击【开始 AI 识图】且已有预览图片时调用后端 AI 接口
   const handleAnalyze = async () => {
     if (!previewUrl || !selectedFile) return;
+
+    // Cal AI 免费次数门控：Pro 无限次；前 2 次免费；第 3 次拍照触发 $9.99 订阅 Paywall
+    if (!isPro && getScanCount() >= FREE_SCAN_LIMIT) {
+      addLog(`[Paywall] 免费拍照次数已用完（${FREE_SCAN_LIMIT} 次），第 3 次触发 Pro 订阅`);
+      void handlePaywall();
+      return;
+    }
 
     // 积分门槛：Pro 用户无限次免扣；普通用户需至少 1 积分
     if (!isPro && credits < 1) {
@@ -431,6 +474,9 @@ function MealRecorder({
 
       const data = await res.json();
       setResult(data.records || []);
+      // 免费次数 +1（第 3 次拍照前仍为免费）
+      const used = incrementScanCount();
+      addLog(`[SCAN] 免费次数已使用 ${used}/${FREE_SCAN_LIMIT}`);
       // 日志面板直接打印命中模型名（例如 "Gemini (gemini-2.5-flash)"）
       const modelLabel = data.model?.label || (data.model ? `${data.model.provider} (${data.model.model || "unknown"})` : "");
       if (modelLabel) addLog(`[AI] 识别模型: ${modelLabel}`);
@@ -1462,6 +1508,8 @@ export default function Home() {
             writeProFlag(pro);
             setIsPro(pro);
             syncFromServer(session.user_id);
+            // 新账号登录 → 重置免费扫描次数（重新获得 2 次免费拍照）
+            resetScanCount();
             // 首次登录 → 引导 3 步 Onboarding（性别/体重目标/卡路里目标）
             setProfile(getProfile());
             if (!isOnboarded()) setOnboardingOpen(true);
@@ -1472,6 +1520,7 @@ export default function Home() {
             setCredits(DEFAULT_CREDITS);
             setProfile(null);
             setOnboardingOpen(false);
+            resetScanCount();
             syncFromServer();
           }}
         />

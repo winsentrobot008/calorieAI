@@ -10,6 +10,8 @@
   "food_items": "items",
   "save_to_log": "Save to Log",
   "saved_to_log": "Saved to today's log",
+  "paywall_redirecting": "Free scans used up — redirecting to Pro subscription…",
+  "paywall_mock": "Demo mode: Stripe not configured, subscription skipped",
   "onboarding_title": "Set Up Your Goals",
   "onboarding_skip": "Skip",
   "onboarding_next": "Next",

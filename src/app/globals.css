@@ -521,7 +521,8 @@ body {
   .plan-btn,
   .stripe-pay-btn,
   .payment-method-btn,
-  .submit-btn {
+  .submit-btn,
+  .upload-btn {
     min-height: 48px;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
@@ -536,7 +537,18 @@ body {
     padding: 12px 6px;
   }
   .btn-upgrade {
-    min-height: 32px;
+    min-height: 48px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* Cal AI 移动端触达标准：核心交互按钮高度 ≥48px */
+  .tab,
+  .meal-type-btn,
+  .btn-login,
+  .ad-reward-btn,
+  .goal-btn,
+  .trend-btn {
+    min-height: 48px;
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
   }

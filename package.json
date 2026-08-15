@@ -10,7 +10,8 @@
     "test": "npm run test:routes && npm run test:api",
     "test:routes": "node scripts/check-routes.mjs",
     "test:api": "node scripts/smoke-api.mjs",
-    "test:e2e": "python ../../scripts/qa_inspect.py --url http://127.0.0.1:3100",
+    "test:e2e": "playwright test",
+    "test:qa": "python ../../scripts/qa_inspect.py --url http://127.0.0.1:3100",
     "qa:ui": "python scripts/qa_ui.py --url http://127.0.0.1:3100",
     "demo:visual": "python scripts/ceo_visual_demo.py",
     "deploy:prod": "node scripts/deploy-prod.mjs",
@@ -26,6 +27,7 @@
     "stripe": "^22.3.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/pg": "^8.21.0",
