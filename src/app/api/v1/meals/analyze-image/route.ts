@@ -20,19 +20,14 @@ const gateway = createGatewayClient({
 /**
  * POST /api/v1/meals/analyze-image
  *
- * 接收上传的食物图片，将其 Base64 编码后发送给视觉 AI 模型识别。
+ * 接收上传的食物图片，将其 Base64 编码后发送给 Google Gemini Vision 模型识别。
  *
- * 提供商 A → B 自动回退链（按顺序尝试，任一成功即返回真实识别结果）:
- *   - A: GEMINI_API_KEY      → Google Gemini Vision（原生多模态接口）
- *   - B: OPENROUTER_API_KEY  → OpenRouter 聚合视觉模型（OpenAI 兼容接口）
- *
- * 可选模型覆盖:
+ * 模型配置:
+ *   - GEMINI_API_KEY    → Google Gemini Vision
  *   - GEMINI_MODEL      （默认取 APP_CONFIG.models.vision = gemini-1.5-flash，低成本视觉模型）
- *   - OPENROUTER_MODEL  （默认 openai/gpt-4o-mini）
  *
  * Vision API 降本规范（v1）：
- *   - 请求参数 max_tokens=200（OpenAI 兼容接口）；Gemini 原生接口 generationConfig.maxOutputTokens=200；
- *   - OpenAI 兼容接口 image_url 设置 detail:"low"（低分辨率缩略图计费）；
+ *   - Gemini 原生接口 generationConfig.maxOutputTokens=200；
  *   - 单 IP 每日 ≤ 30 次（dailyRateLimitRequest）+ 每分钟 ≤ 6 次双闸门。
  *
  * 统一返回 Payload:
@@ -49,15 +44,15 @@ const gateway = createGatewayClient({
  *       confidence: number | null
  *     }>,
  *     model: {
- *       provider: string,   // 命中提供商: gemini | openrouter
- *       model: string,      // 实际使用的模型 ID（如 gemini-1.5-flash / openai/gpt-4o-mini）
- *       label: string,      // 展示名（如 "Gemini (gemini-1.5-flash)" / "OpenRouter (gpt-4o-mini)"）
- *       switched: boolean,  // 是否为回退提供商命中
- *       attempts: number    // 实际尝试过的提供商数量
+ *       provider: string,   // 命中提供商: gemini
+ *       model: string,      // 实际使用的模型 ID（如 gemini-1.5-flash）
+ *       label: string,      // 展示名（如 "Gemini (gemini-1.5-flash)"）
+ *       switched: boolean,  // false
+ *       attempts: number    // 1
  *     }
  *   }
  *
- * 如果均未配置或全部调用失败，返回明确错误（NO_VISION_KEY / VISION_PROVIDER_ERROR），
+ * 如果未配置或调用失败，返回明确错误（NO_VISION_KEY / VISION_PROVIDER_ERROR），
  * 绝不回退到固定 Mock 数据，避免把演示数据误当真实识别结果。
  */
 export async function POST(request: NextRequest) {
@@ -227,86 +222,62 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // A → B 回退链定义（严格按数组顺序尝试，缺失密钥自动跳过）
-    const providers: VisionProvider[] = [
-      {
-        name: "gemini",
-        apiKey: process.env.GEMINI_API_KEY,
-        analyze: (apiKey) => analyzeWithGemini(base64, mimeType, mealType, apiKey),
-      },
-      {
-        name: "openrouter",
-        apiKey: process.env.OPENROUTER_API_KEY,
-        analyze: (apiKey) => analyzeWithOpenRouter(base64, mimeType, mealType, apiKey),
-      },
-    ];
-
-    let lastError: Error | null = null;
-    let attempted = 0;
-
-    for (const provider of providers) {
-      const apiKey = provider.apiKey;
-      if (!apiKey) continue;
-      attempted += 1;
-      try {
-        const result = await provider.analyze(apiKey);
-        // 服务端日志显式记录命中提供商与模型名
-        console.log(`[Vision] 识别成功，命中提供商: ${result.model.label}（attempts=${attempted}）`);
-        // 运行日志：记录命中模型、耗时与结果数量
-        await db.recordVisionLog({
-          ip,
-          provider: result.model.provider,
-          model: result.model.model,
-          label: result.model.label,
-          status: 200,
-          latency_ms: Date.now() - startTime,
-          count: result.count,
-        });
-        // 统一附上回退元数据：switched=true 表示实际由备用提供商完成识别
-        return NextResponse.json({
-          ...result,
-          model: { ...result.model, provider: provider.name, switched: attempted > 1, attempts: attempted },
-        });
-      } catch (err: any) {
-        lastError = err;
-        console.error(`[Vision] ${provider.name} failed:`, err.message);
-      }
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      console.warn("[Vision] No API key configured (GEMINI_API_KEY)");
+      await db.recordVisionLog({
+        ip,
+        provider: "api",
+        label: "VISION",
+        status: 503,
+        latency_ms: Date.now() - startTime,
+        error: "NO_VISION_KEY",
+      });
+      return NextResponse.json(
+        {
+          error: "未配置 AI 视觉密钥（GEMINI_API_KEY），无法识图",
+          detail: "未配置 AI 视觉密钥（GEMINI_API_KEY），无法识图",
+          code: "NO_VISION_KEY",
+        },
+        { status: 503 }
+      );
     }
 
-    // 全部提供商失败：返回可诊断错误，绝不静默回退到固定 Mock 数据
-    if (lastError) {
-      console.error("[Vision] All providers failed:", lastError.message);
+    try {
+      const result = await analyzeWithGemini(base64, mimeType, mealType, apiKey);
+      console.log(`[Vision] 识别成功，命中提供商: ${result.model.label}`);
+      await db.recordVisionLog({
+        ip,
+        provider: result.model.provider,
+        model: result.model.model,
+        label: result.model.label,
+        status: 200,
+        latency_ms: Date.now() - startTime,
+        count: result.count,
+      });
+      return NextResponse.json({
+        ...result,
+        model: { ...result.model, provider: "gemini", switched: false, attempts: 1 },
+      });
+    } catch (err: any) {
+      console.error("[Vision] Gemini API failed:", err.message);
       await db.recordVisionLog({
         ip,
         provider: "api",
         label: "VISION",
         status: 502,
         latency_ms: Date.now() - startTime,
-        error: lastError.message.slice(0, 200),
+        error: (err?.message || "Gemini Error").slice(0, 200),
       });
       return NextResponse.json(
-        { detail: "AI 视觉识别失败: " + lastError.message, code: "VISION_PROVIDER_ERROR" },
+        {
+          error: "Gemini API Error: " + (err?.message || "未知错误"),
+          detail: "Gemini API Error: " + (err?.message || "未知错误"),
+          code: "VISION_PROVIDER_ERROR",
+        },
         { status: 502 }
       );
     }
-
-    // 无任何密钥：明确报错（NO_VISION_KEY），不再返回固定 Mock 的白米饭
-    console.warn("[Vision] No API key configured (GEMINI_API_KEY / OPENROUTER_API_KEY)");
-    await db.recordVisionLog({
-      ip,
-      provider: "api",
-      label: "VISION",
-      status: 503,
-      latency_ms: Date.now() - startTime,
-      error: "NO_VISION_KEY",
-    });
-    return NextResponse.json(
-      {
-        detail: "未配置 AI 视觉密钥（GEMINI_API_KEY / OPENROUTER_API_KEY），无法识图",
-        code: "NO_VISION_KEY",
-      },
-      { status: 503 }
-    );
   } catch (error: any) {
     console.error("[Vision Error]", error);
     await db.recordVisionLog({
@@ -317,11 +288,11 @@ export async function POST(request: NextRequest) {
       latency_ms: Date.now() - startTime,
       error: (error?.message || "UNKNOWN").slice(0, 200),
     });
-    return NextResponse.json({ detail: "图像分析失败: " + error.message }, { status: 500 });
+    return NextResponse.json({ error: "图像分析失败: " + error.message, detail: "图像分析失败: " + error.message }, { status: 500 });
   }
 }
 
-type ProviderName = "gemini" | "openrouter";
+type ProviderName = "gemini";
 
 interface AnalysisResult {
   count: number;
@@ -330,21 +301,13 @@ interface AnalysisResult {
   model: { provider: ProviderName; model: string; label: string; switched: boolean };
 }
 
-interface VisionProvider {
-  name: ProviderName;
-  apiKey: string | undefined;
-  analyze: (apiKey: string) => Promise<AnalysisResult>;
-}
-
 const PROVIDER_DISPLAY: Record<ProviderName, string> = {
   gemini: "Gemini",
-  openrouter: "OpenRouter",
 };
 
-/** 生成前端可直接展示的模型名，如 "Gemini (gemini-1.5-flash)" / "OpenRouter (gpt-4o-mini)" */
+/** 生成前端可直接展示的模型名，如 "Gemini (gemini-1.5-flash)" */
 function buildModelLabel(provider: ProviderName, model: string): string {
-  const shortModel = provider === "openrouter" ? model.split("/").pop() || model : model;
-  return `${PROVIDER_DISPLAY[provider]} (${shortModel})`;
+  return `${PROVIDER_DISPLAY[provider]} (${model})`;
 }
 
 /** 构造统一的识图提示词（来自套娃应用统一配置 app-config，克隆时按应用替换） */
@@ -352,7 +315,7 @@ function buildPrompt(mealType: string): string {
   return APP_CONFIG.prompts.image(mealType);
 }
 
-/** A: Google Gemini Vision（原生多模态接口） */
+/** Google Gemini Vision（原生多模态接口） */
 async function analyzeWithGemini(
   base64: string,
   mimeType: string,
@@ -399,79 +362,6 @@ async function analyzeWithGemini(
     total_cal: parsed.total_cal,
     model: { provider: "gemini", model, label: buildModelLabel("gemini", model), switched: false },
   };
-}
-
-/** OpenAI 兼容接口（供 OpenRouter 复用） */
-async function analyzeWithOpenAICompatible(
-  base64: string,
-  mimeType: string,
-  mealType: string,
-  apiKey: string,
-  options: { provider: ProviderName; endpoint: string; model: string }
-): Promise<AnalysisResult> {
-  const response = await fetch(options.endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: options.model,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: buildPrompt(mealType) },
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:${mimeType};base64,${base64}`,
-                detail: "low",
-              },
-            },
-          ],
-        },
-      ],
-      max_tokens: 200,
-      response_format: { type: "json_object" },
-    }),
-  });
-
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`${options.provider} API ${response.status}: ${errText.slice(0, 200)}`);
-  }
-
-  const data = await response.json();
-  const text = data?.choices?.[0]?.message?.content || "[]";
-  const parsed = parseRecords(text);
-  const records = parsed.records;
-
-  return {
-    count: records.length,
-    records,
-    total_cal: parsed.total_cal,
-    model: {
-      provider: options.provider,
-      model: options.model,
-      label: buildModelLabel(options.provider, options.model),
-      switched: false,
-    },
-  };
-}
-
-/** B: OpenRouter（聚合多模型，OpenAI 兼容接口） */
-function analyzeWithOpenRouter(
-  base64: string,
-  mimeType: string,
-  mealType: string,
-  apiKey: string
-): Promise<AnalysisResult> {
-  return analyzeWithOpenAICompatible(base64, mimeType, mealType, apiKey, {
-    provider: "openrouter",
-    endpoint: "https://openrouter.ai/api/v1/chat/completions",
-    model: process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini",
-  });
 }
 
 /**

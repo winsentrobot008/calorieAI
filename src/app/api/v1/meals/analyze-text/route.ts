@@ -7,7 +7,7 @@ import { findLocalFoodInText, getFoodCache, setFoodCache } from "@/lib/cache/foo
 import { reserveMealCredit } from "@/lib/cost-control";
 
 // 中央网关接入（可选）：配置 GATEWAY_BASE_URL + GATEWAY_APP_KEY 时优先走统一文字分析端点；
-// 网关未配置或不可用时自动回退直连 Gemini / OpenRouter，避免报错或返回空值。
+// 网关未配置或不可用时自动回退直连 Gemini，避免报错或返回空值。
 const gateway = createGatewayClient({
   baseUrl: process.env.GATEWAY_BASE_URL || "",
   appId: "calorieai",
@@ -17,7 +17,7 @@ const gateway = createGatewayClient({
 /**
  * POST /api/v1/meals/analyze-text
  *
- * 接收用户食物描述文本（如 “吃了200g米饭和100g西兰花”），调用 AI 估算营养数据。
+ * 接收用户食物描述文本（如 “吃了200g米饭和100g西兰花”），调用 Google Gemini 估算营养数据。
  *
  * 请求体: { text: string, meal_type?: string }
  * 响应:
@@ -29,10 +29,9 @@ const gateway = createGatewayClient({
  *     model: { provider, model, label, switched, attempts, gateway? }
  *   }
  *
- * 提供商 A → B 自动回退链（任一成功即返回真实估算）:
- *   A: GEMINI_API_KEY      → Google Gemini（文本生成）
- *   B: OPENROUTER_API_KEY  → OpenRouter 聚合模型（OpenAI 兼容）
- * 全部失败返回可诊断错误，绝不回退固定 Mock 数据。
+ * 模型配置:
+ *   - GEMINI_API_KEY      → Google Gemini（文本生成）
+ * 如果未配置或调用失败，返回可诊断错误，绝不回退固定 Mock 数据。
  */
 export async function POST(request: NextRequest) {
   const startTime = Date.now();
@@ -145,90 +144,64 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // ── A → B 直连回退链 ──
-    const providers: TextProvider[] = [
-      {
-        name: "gemini",
-        apiKey: process.env.GEMINI_API_KEY,
-        analyze: (apiKey) => analyzeTextWithGemini(text, mealType, apiKey),
-      },
-      {
-        name: "openrouter",
-        apiKey: process.env.OPENROUTER_API_KEY,
-        analyze: (apiKey) =>
-          analyzeTextWithOpenAICompatible(text, mealType, apiKey, {
-            provider: "openrouter",
-            endpoint: "https://openrouter.ai/api/v1/chat/completions",
-            model: process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini",
-          }),
-      },
-    ];
-
-    let lastError: Error | null = null;
-    let attempted = 0;
-
-    for (const provider of providers) {
-      const apiKey = provider.apiKey;
-      if (!apiKey) continue;
-      attempted += 1;
-      try {
-        const result = await provider.analyze(apiKey);
-        const payload = buildPayload(result, attempted);
-        console.log(
-          `[Text] 分析成功，命中提供商: ${result.model.label}（attempts=${attempted}，count=${result.count}）`
-        );
-        await db.recordVisionLog({
-          ip,
-          provider: "text",
-          model: result.model.model,
-          label: result.model.label,
-          status: 200,
-          latency_ms: Date.now() - startTime,
-          count: result.count,
-        });
-        const cacheNames = result.records.map((record) => String(record.food || "")).filter(Boolean);
-        if (cacheNames.length) await setFoodCache(cacheNames, result.records);
-        return NextResponse.json(payload);
-      } catch (err: any) {
-        lastError = err;
-        console.error(`[Text] ${provider.name} failed:`, err.message);
-      }
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      console.warn("[Text] No API key configured (GEMINI_API_KEY)");
+      await db.recordVisionLog({
+        ip,
+        provider: "api",
+        label: "TEXT",
+        status: 503,
+        latency_ms: Date.now() - startTime,
+        error: "NO_TEXT_KEY",
+      });
+      return NextResponse.json(
+        {
+          error: "未配置 AI 文本密钥（GEMINI_API_KEY），无法分析",
+          detail: "未配置 AI 文本密钥（GEMINI_API_KEY），无法分析",
+          code: "NO_TEXT_KEY",
+        },
+        { status: 503 }
+      );
     }
 
-    // ── 全部提供商失败：返回可诊断错误 ──
-    if (lastError) {
-      console.error("[Text] All providers failed:", lastError.message);
+    try {
+      const result = await analyzeTextWithGemini(text, mealType, apiKey);
+      const payload = buildPayload(result, 1);
+      console.log(
+        `[Text] 分析成功，命中提供商: ${result.model.label}（count=${result.count}）`
+      );
+      await db.recordVisionLog({
+        ip,
+        provider: "text",
+        model: result.model.model,
+        label: result.model.label,
+        status: 200,
+        latency_ms: Date.now() - startTime,
+        count: result.count,
+      });
+      const cacheNames = result.records.map((record) => String(record.food || "")).filter(Boolean);
+      if (cacheNames.length) await setFoodCache(cacheNames, result.records);
+      return NextResponse.json(payload);
+    } catch (err: any) {
+      console.error("[Text] Gemini API failed:", err.message);
       await db.recordVisionLog({
         ip,
         provider: "api",
         label: "TEXT",
         status: 502,
         latency_ms: Date.now() - startTime,
-        error: lastError.message.slice(0, 200),
+        error: (err?.message || "Gemini Error").slice(0, 200),
       });
       return NextResponse.json(
-        { detail: "AI 文字分析失败: " + lastError.message, code: "TEXT_PROVIDER_ERROR" },
+        {
+          error: "Gemini API Error: " + (err?.message || "未知错误"),
+          detail: "Gemini API Error: " + (err?.message || "未知错误"),
+          code: "TEXT_PROVIDER_ERROR",
+        },
         { status: 502 }
       );
     }
-
-    // ── 无任何密钥：明确报错 ──
-    console.warn("[Text] No API key configured (GEMINI_API_KEY / OPENROUTER_API_KEY)");
-    await db.recordVisionLog({
-      ip,
-      provider: "api",
-      label: "TEXT",
-      status: 503,
-      latency_ms: Date.now() - startTime,
-      error: "NO_TEXT_KEY",
-    });
-    return NextResponse.json(
-      {
-        detail: "未配置 AI 文本密钥（GEMINI_API_KEY / OPENROUTER_API_KEY），无法分析",
-        code: "NO_TEXT_KEY",
-      },
-      { status: 503 }
-    );
   } catch (error: any) {
     console.error("[Text Error]", error);
     await db.recordVisionLog({
@@ -239,24 +212,18 @@ export async function POST(request: NextRequest) {
       latency_ms: Date.now() - startTime,
       error: (error?.message || "UNKNOWN").slice(0, 200),
     });
-    return NextResponse.json({ detail: "文字分析失败: " + (error?.message || "未知错误"), code: "TEXT_ERROR" }, { status: 500 });
+    return NextResponse.json({ error: "文字分析失败: " + (error?.message || "未知错误"), detail: "文字分析失败: " + (error?.message || "未知错误"), code: "TEXT_ERROR" }, { status: 500 });
   }
 }
 
 // ─── 提供商封装（与 analyze-image 同构，文本版） ──────────────────────
 
-type TextProviderName = "gemini" | "openrouter";
+type TextProviderName = "gemini";
 
 interface TextAnalysisResult {
   count: number;
   records: FoodRecord[];
   model: { provider: TextProviderName; model: string; label: string; switched: boolean };
-}
-
-interface TextProvider {
-  name: TextProviderName;
-  apiKey: string | undefined;
-  analyze: (apiKey: string) => Promise<TextAnalysisResult>;
 }
 
 interface FoodRecord {
@@ -272,12 +239,10 @@ interface FoodRecord {
 
 const PROVIDER_DISPLAY: Record<TextProviderName, string> = {
   gemini: "Gemini",
-  openrouter: "OpenRouter",
 };
 
 function buildModelLabel(provider: TextProviderName, model: string): string {
-  const shortModel = provider === "openrouter" ? model.split("/").pop() || model : model;
-  return `${PROVIDER_DISPLAY[provider]} (${shortModel})`;
+  return `${PROVIDER_DISPLAY[provider]} (${model})`;
 }
 
 /** 构造文字分析提示词（来自套娃应用统一配置 app-config，克隆时按应用替换） */
@@ -285,7 +250,7 @@ function buildTextPrompt(text: string, mealType: string): string {
   return APP_CONFIG.prompts.text(text, mealType);
 }
 
-/** A: Google Gemini（文本生成，默认低成本模型 gemini-1.5-flash） */
+/** Google Gemini（文本生成，默认低成本模型 gemini-1.5-flash） */
 async function analyzeTextWithGemini(
   text: string,
   mealType: string,
@@ -308,7 +273,8 @@ async function analyzeTextWithGemini(
     }
   );
   if (!response.ok) {
-    throw new Error(`Gemini API ${response.status}: ${(await response.text()).slice(0, 200)}`);
+    const errText = await response.text();
+    throw new Error(`Gemini API ${response.status}: ${errText.slice(0, 200)}`);
   }
   const data = await response.json();
   const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || "[]";
@@ -317,44 +283,6 @@ async function analyzeTextWithGemini(
     count: records.length,
     records,
     model: { provider: "gemini", model, label: buildModelLabel("gemini", model), switched: false },
-  };
-}
-
-/** OpenAI 兼容接口（OpenRouter 文本对话） */
-async function analyzeTextWithOpenAICompatible(
-  text: string,
-  mealType: string,
-  apiKey: string,
-  options: { provider: TextProviderName; endpoint: string; model: string }
-): Promise<TextAnalysisResult> {
-  const response = await fetch(options.endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: options.model,
-      messages: [{ role: "user", content: buildTextPrompt(text, mealType) }],
-      max_tokens: 200,
-      response_format: { type: "json_object" },
-    }),
-  });
-  if (!response.ok) {
-    throw new Error(`${options.provider} API ${response.status}: ${(await response.text()).slice(0, 200)}`);
-  }
-  const data = await response.json();
-  const raw = data?.choices?.[0]?.message?.content || "[]";
-  const records = parseFoodRecords(raw);
-  return {
-    count: records.length,
-    records,
-    model: {
-      provider: options.provider,
-      model: options.model,
-      label: buildModelLabel(options.provider, options.model),
-      switched: false,
-    },
   };
 }
 
