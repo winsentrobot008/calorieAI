@@ -6,15 +6,15 @@
  *   - 统一在客户端 Canvas 压缩后再发送给 /api/v1/meals/analyze-image。
  *
  * 规则（硬约束）：
- *   a. 最大边长 1024px（保持宽高比）；
- *   b. 统一导出 image/jpeg、质量 0.8；
+ *   a. 最大边长 768px（保持宽高比）；
+ *   b. 统一导出 image/jpeg、质量 0.7；
  *   c. iPhone .heic / .heif 通过浏览器解码 + Canvas 兜底转换（无法解码时给出可读错误）；
- *   d. 压缩后 Payload 严格 ≤ 500KB（逐级降质量/降边长，超限抛 STILL_TOO_LARGE）。
+ *   d. 压缩后 Payload 严格 ≤ 200KB（逐级降质量/降边长，超限抛 STILL_TOO_LARGE）。
  */
 
-const MAX_EDGE = 1024;
-const JPEG_QUALITY = 0.8;
-const MAX_BYTES = 500 * 1024; // 500KB
+const MAX_EDGE = 768;
+const JPEG_QUALITY = 0.7;
+const MAX_BYTES = 200 * 1024; // 200KB
 
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
 const HEIC_MIME_RE = /image\/heic|image\/heif/i;
@@ -75,9 +75,9 @@ function drawToJpegBlob(
 }
 
 /**
- * 压缩图片文件 → JPEG（≤500KB / 最长边 ≤1024px）。
+ * 压缩图片文件 → JPEG（≤200KB / 最长边 ≤768px）。
  * 抛错码：DECODE_FAILED（一般解码失败）、HEIC_DECODE_FAILED（HEIC 浏览器不支持）、
- *        STILL_TOO_LARGE（极限压缩后仍超 500KB）、CANVAS_UNAVAILABLE / JPEG_EXPORT_FAILED。
+ *        STILL_TOO_LARGE（极限压缩后仍超 200KB）、CANVAS_UNAVAILABLE / JPEG_EXPORT_FAILED。
  */
 export async function compressImageFile(file: File): Promise<CompressResult> {
   const originalSize = file.size;
@@ -94,10 +94,10 @@ export async function compressImageFile(file: File): Promise<CompressResult> {
   const height = img.naturalHeight;
   if (!width || !height) throw new Error("DECODE_FAILED");
 
-  // 逐级降质/降边长，直至 ≤ 500KB（硬约束）
+  // 逐级降质/降边长，直至 ≤ 200KB（硬约束）
   const steps: { edge: number; quality: number }[] = [];
-  for (const edge of [MAX_EDGE, 896, 768, 640]) {
-    for (const quality of [JPEG_QUALITY, 0.7, 0.6, 0.5]) {
+  for (const edge of [MAX_EDGE, 640, 512, 384]) {
+    for (const quality of [JPEG_QUALITY, 0.6, 0.5, 0.4]) {
       steps.push({ edge, quality });
     }
   }

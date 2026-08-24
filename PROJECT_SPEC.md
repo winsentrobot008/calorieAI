@@ -37,6 +37,17 @@
 
 ## 2. 核心架构
 
+### 2.1 Token & Cost Control Architecture
+
+Meal analysis applies four guardrails in order:
+
+1. **Pre-LLM cache**: normalized food names are hashed with MD5 and looked up in Upstash Redis (`calorieai:food-cache:*`). Single standard foods also resolve from the local static food database without an AI call.
+2. **Prompt and token constraints**: OpenAI-compatible completions use `max_tokens: 200` and `response_format: { type: "json_object" }`, with compact nutrition-only prompts.
+3. **Edge guard and credit deduction**: meal endpoints apply a distributed Redis request limit and reserve one server-side credit before gateway or provider execution. Empty balances return HTTP 402; limits return HTTP 429.
+4. **Smart model tiering**: one standard food uses the local/lightweight path. Gemini 1.5 Flash handles complex multi-food analysis after cache and credit checks.
+
+The Redis guard uses the existing Upstash REST configuration (`KV_REST_API_URL`/`KV_REST_API_TOKEN`, with Vercel aliases). Local development without Redis retains the DAL fallback for credits.
+
 ```
 src/
 ├── app/
@@ -215,7 +226,7 @@ python scripts/ceo_visual_demo.py --mode mobile
 |------|------|
 | [`README.md`](README.md) | 项目对外说明：技术栈、快速启动、QA 质检指令 |
 | [`MEMORY.md`](MEMORY.md) | 项目记忆：技术栈/目录/规范 + 历史 Bug 自愈履历与关键决策 |
-| [`../../docs/AI_FACTORY_SPEC.md`](../../docs/AI_FACTORY_SPEC.md) | **AI 工厂 SOP 说明书**：slowMo=1200ms 轨迹光标巡检 / Vision 数量清点总账 / Canvas 500KB 压缩防爆 |
+| [`../../docs/AI_FACTORY_SPEC.md`](../../docs/AI_FACTORY_SPEC.md) | **AI 工厂 SOP 说明书**：slowMo=1200ms 轨迹光标巡检 / Vision 数量清点总账 / Canvas 200KB 压缩防爆 |
 
 ---
 
@@ -225,7 +236,7 @@ python scripts/ceo_visual_demo.py --mode mobile
 |------|------|----------|
 | 2026.08 | **v3.5** | CEO 可视化巡检全面升级：smooth_move 分段插值轨迹 + human_click 拟人化点击 + 40px 点击波纹；TEMP 真实图片集上传校验（图片已优化 XXKB / 数量+约重 / 整盘总热量）；积分 -1 轮询记录；逐模式结果报告；工厂 SOP 沉淀至 `git008/docs/AI_FACTORY_SPEC.md`（桌面/移动双端全绿） |
 | 2026.08 | **v3.4** | 引入【语义级 QA 反 Mock 门禁】（smoke-api/qa_ui 动态语义探针：随机输入 + Provider 标记 + Mock 签名 FAIL 阻断）与【10 分钟套娃克隆引擎】（clone_app.mjs + TEMPLATE_APP.md + app-config.ts 集中控制 App-ID/Prompt/配色），实现套娃矩阵标准化 |
-| 2026.08 | v3.3 | 文字输入分析真实化：analyze-text 网关优先 + Gemini/OpenRouter/DeepSeek A/B/C 回退，返回 records/items/totalKcal/PFC 汇总 |
+| 2026.08 | v3.3 | 文字输入分析真实化：analyze-text 网关优先 + Gemini/OpenRouter A/B 回退，返回 records/items/totalKcal/PFC 汇总 |
 | 2026.08 | v3.2 | Credits Top-up 一次性付款（弃订阅）+ 管理后台鉴权隐身 + qa:ui 脚本 |
 | 2026.08 | v3.1 | 交叉对抗 QA：Stripe 支付方式降级修复、TTS 调试 UI 下线 |
 | 2026.08 | v3.0 | SaaS 矩阵架构：Central Gateway + 套娃应用矩阵 + 1-Step Clone |

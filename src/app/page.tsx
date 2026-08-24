@@ -439,7 +439,7 @@ function MealRecorder({
     showToast(t("ai_optimizing"));
 
     try {
-      // ── 客户端压缩：Canvas 最长边 1024 / JPEG 0.8 / ≤500KB（规避 Vercel 413）──
+      // ── 客户端压缩：Canvas 最长边 768 / JPEG 0.7 / ≤200KB（Vision API 降本 + 规避 Vercel 413）──
       let payload = selectedFile;
       try {
         const compressed = await compressImageFile(selectedFile);
@@ -458,6 +458,7 @@ function MealRecorder({
       const fd = new FormData();
       fd.append("file", payload);
       fd.append("meal_type", mealType);
+      fd.append("user_id", getUserId());
 
       const res = await fetch(`${API}/v1/meals/analyze-image`, {
         method: "POST",
@@ -481,7 +482,7 @@ function MealRecorder({
       // 免费次数 +1（第 3 次拍照前仍为免费）
       const used = incrementScanCount();
       addLog(`[SCAN] 免费次数已使用 ${used}/${FREE_SCAN_LIMIT}`);
-      // 日志面板直接打印命中模型名（例如 "Gemini (gemini-2.5-flash)"）
+      // 日志面板直接打印命中模型名（例如 "Gemini (gemini-1.5-flash)"）
       const modelLabel = data.model?.label || (data.model ? `${data.model.provider} (${data.model.model || "unknown"})` : "");
       if (modelLabel) addLog(`[AI] 识别模型: ${modelLabel}`);
       addLog(`[AI] 识别到 ${data.count} 种食物`);

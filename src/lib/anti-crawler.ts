@@ -43,6 +43,11 @@ const WINDOW_MS = 60_000;
 const MAX_REQUESTS_PER_WINDOW = 6;
 const buckets = new Map<string, number[]>();
 
+// ─── 单 IP 每日滑动窗口限频（Vision API 降本：默认 30 次/日） ─────────
+const DAILY_WINDOW_MS = 24 * 60 * 60_000;
+const DAILY_MAX_REQUESTS = 30;
+const dailyBuckets = new Map<string, number[]>();
+
 export interface RateLimitResult {
   allowed: boolean;
   remaining: number;
@@ -65,7 +70,41 @@ export function rateLimitRequest(ip: string): RateLimitResult {
   return { allowed: true, remaining: MAX_REQUESTS_PER_WINDOW - timestamps.length };
 }
 
+/**
+ * Vision API 降本频控：单 IP 每 24 小时最多 30 次（滑动窗口）。
+ * 与每分钟 6 次的短期防刷叠加，双闸门同时生效。
+ */
+export function dailyRateLimitRequest(
+  ip: string,
+  limit: number = DAILY_MAX_REQUESTS
+): RateLimitResult {
+  const now = Date.now();
+  const timestamps = (dailyBuckets.get(ip) || []).filter(
+    (ts) => now - ts < DAILY_WINDOW_MS
+  );
+
+  if (timestamps.length >= limit) {
+    dailyBuckets.set(ip, timestamps);
+    const retryAfter = Math.ceil((timestamps[0] + DAILY_WINDOW_MS - now) / 1000);
+    return { allowed: false, remaining: 0, retryAfterSeconds: retryAfter };
+  }
+
+  timestamps.push(now);
+  dailyBuckets.set(ip, timestamps);
+
+  // 清理 24h 内无活动的 Key，防止 Map 无限增长
+  if (dailyBuckets.size > 5000) {
+    const nowMs = Date.now();
+    for (const [k, v] of dailyBuckets) {
+      if (!v.some((t) => nowMs - t < DAILY_WINDOW_MS)) dailyBuckets.delete(k);
+    }
+  }
+
+  return { allowed: true, remaining: limit - timestamps.length };
+}
+
 /** 测试辅助：清空限频桶（仅测试/诊断用） */
 export function _resetRateLimitBuckets(): void {
   buckets.clear();
+  dailyBuckets.clear();
 }

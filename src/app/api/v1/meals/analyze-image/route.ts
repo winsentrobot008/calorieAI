@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getClientIp, checkAntiCrawler, rateLimitRequest } from "@/lib/anti-crawler";
+import {
+  getClientIp,
+  checkAntiCrawler,
+  rateLimitRequest,
+  dailyRateLimitRequest,
+} from "@/lib/anti-crawler";
 import { db } from "@/lib/db";
 import { createGatewayClient } from "@/lib/gateway-client";
 import { APP_CONFIG } from "@/lib/app-config";
+import { reserveMealCredit } from "@/lib/cost-control";
 
 // 中央网关接入（可选）：配置 GATEWAY_BASE_URL + GATEWAY_APP_KEY 时启用
 const gateway = createGatewayClient({
@@ -16,16 +22,18 @@ const gateway = createGatewayClient({
  *
  * 接收上传的食物图片，将其 Base64 编码后发送给视觉 AI 模型识别。
  *
- * 提供商 A → B → C 自动回退链（按顺序尝试，任一成功即返回真实识别结果）:
+ * 提供商 A → B 自动回退链（按顺序尝试，任一成功即返回真实识别结果）:
  *   - A: GEMINI_API_KEY      → Google Gemini Vision（原生多模态接口）
  *   - B: OPENROUTER_API_KEY  → OpenRouter 聚合视觉模型（OpenAI 兼容接口）
- *   - C: DEEPSEEK_API_KEY    → DeepSeek（OpenAI 兼容接口；官方文本模型不支持图片时
- *                               会快速失败并交回回退链 / 返回可诊断错误）
  *
  * 可选模型覆盖:
- *   - GEMINI_MODEL      （默认 gemini-2.5-flash）
+ *   - GEMINI_MODEL      （默认取 APP_CONFIG.models.vision = gemini-1.5-flash，低成本视觉模型）
  *   - OPENROUTER_MODEL  （默认 openai/gpt-4o-mini）
- *   - DEEPSEEK_MODEL    （默认 deepseek-chat）
+ *
+ * Vision API 降本规范（v1）：
+ *   - 请求参数 max_tokens=200（OpenAI 兼容接口）；Gemini 原生接口 generationConfig.maxOutputTokens=200；
+ *   - OpenAI 兼容接口 image_url 设置 detail:"low"（低分辨率缩略图计费）；
+ *   - 单 IP 每日 ≤ 30 次（dailyRateLimitRequest）+ 每分钟 ≤ 6 次双闸门。
  *
  * 统一返回 Payload:
  *   {
@@ -41,9 +49,9 @@ const gateway = createGatewayClient({
  *       confidence: number | null
  *     }>,
  *     model: {
- *       provider: string,   // 命中提供商: gemini | openrouter | deepseek
- *       model: string,      // 实际使用的模型 ID（如 gemini-2.5-flash / openai/gpt-4o-mini）
- *       label: string,      // 展示名（如 "Gemini (gemini-2.5-flash)" / "OpenRouter (gpt-4o-mini)"）
+ *       provider: string,   // 命中提供商: gemini | openrouter
+ *       model: string,      // 实际使用的模型 ID（如 gemini-1.5-flash / openai/gpt-4o-mini）
+ *       label: string,      // 展示名（如 "Gemini (gemini-1.5-flash)" / "OpenRouter (gpt-4o-mini)"）
  *       switched: boolean,  // 是否为回退提供商命中
  *       attempts: number    // 实际尝试过的提供商数量
  *     }
@@ -92,6 +100,30 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // ── Vision API 降本：单 IP 每日 30 次硬上限（滑动窗口 24h） ──
+    const daily = dailyRateLimitRequest(ip);
+    if (!daily.allowed) {
+      await db.recordVisionLog({
+        ip,
+        provider: "waf",
+        label: "WAF",
+        status: 429,
+        latency_ms: Date.now() - startTime,
+        error: "DAILY_RATE_LIMITED",
+      });
+      return NextResponse.json(
+        {
+          detail: "今日识图次数已达上限（30 次/日），请明天再试",
+          code: "DAILY_RATE_LIMITED",
+          retry_after: daily.retryAfterSeconds,
+        },
+        {
+          status: 429,
+          headers: { "Retry-After": String(daily.retryAfterSeconds || 86400) },
+        }
+      );
+    }
+
     let formData: FormData;
     try {
       formData = await request.formData();
@@ -136,6 +168,37 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ detail: "不支持的图片格式，请上传 JPEG/PNG/WebP" }, { status: 400 });
     }
 
+    // Vision API 降本：服务端兜底体积校验（≤200KB，前端压缩后通常 ~50-150KB）
+    if (file.size > 200 * 1024) {
+      await db.recordVisionLog({
+        ip,
+        provider: "api",
+        label: "API",
+        status: 400,
+        latency_ms: Date.now() - startTime,
+        error: `IMAGE_TOO_LARGE: ${file.size}`,
+      });
+      return NextResponse.json(
+        { detail: "图片体积过大（需 ≤200KB），请重新拍照或选择较小图片", code: "IMAGE_TOO_LARGE" },
+        { status: 400 }
+      );
+    }
+
+    const userId = String(formData.get("user_id") || request.headers.get("x-user-id") || "anonymous");
+    const creditGuard = await reserveMealCredit(userId, ip);
+    if (!creditGuard.allowed) {
+      return NextResponse.json(
+        {
+          detail: creditGuard.status === 402 ? "积分不足，请先充值" : "请求过于频繁，请稍后再试",
+          code: creditGuard.code,
+        },
+        {
+          status: creditGuard.status,
+          headers: creditGuard.retryAfter ? { "Retry-After": String(creditGuard.retryAfter) } : undefined,
+        }
+      );
+    }
+
     // 读取图片为 Base64
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
@@ -164,7 +227,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // A → B → C 回退链定义（严格按数组顺序尝试，缺失密钥自动跳过）
+    // A → B 回退链定义（严格按数组顺序尝试，缺失密钥自动跳过）
     const providers: VisionProvider[] = [
       {
         name: "gemini",
@@ -175,11 +238,6 @@ export async function POST(request: NextRequest) {
         name: "openrouter",
         apiKey: process.env.OPENROUTER_API_KEY,
         analyze: (apiKey) => analyzeWithOpenRouter(base64, mimeType, mealType, apiKey),
-      },
-      {
-        name: "deepseek",
-        apiKey: process.env.DEEPSEEK_API_KEY,
-        analyze: (apiKey) => analyzeWithDeepSeek(base64, mimeType, mealType, apiKey),
       },
     ];
 
@@ -233,7 +291,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 无任何密钥：明确报错（NO_VISION_KEY），不再返回固定 Mock 的白米饭
-    console.warn("[Vision] No API key configured (GEMINI_API_KEY / OPENROUTER_API_KEY / DEEPSEEK_API_KEY)");
+    console.warn("[Vision] No API key configured (GEMINI_API_KEY / OPENROUTER_API_KEY)");
     await db.recordVisionLog({
       ip,
       provider: "api",
@@ -244,7 +302,7 @@ export async function POST(request: NextRequest) {
     });
     return NextResponse.json(
       {
-        detail: "未配置 AI 视觉密钥（GEMINI_API_KEY / OPENROUTER_API_KEY / DEEPSEEK_API_KEY），无法识图",
+        detail: "未配置 AI 视觉密钥（GEMINI_API_KEY / OPENROUTER_API_KEY），无法识图",
         code: "NO_VISION_KEY",
       },
       { status: 503 }
@@ -263,11 +321,12 @@ export async function POST(request: NextRequest) {
   }
 }
 
-type ProviderName = "gemini" | "openrouter" | "deepseek";
+type ProviderName = "gemini" | "openrouter";
 
 interface AnalysisResult {
   count: number;
   records: any[];
+  total_cal?: number;
   model: { provider: ProviderName; model: string; label: string; switched: boolean };
 }
 
@@ -280,10 +339,9 @@ interface VisionProvider {
 const PROVIDER_DISPLAY: Record<ProviderName, string> = {
   gemini: "Gemini",
   openrouter: "OpenRouter",
-  deepseek: "DeepSeek",
 };
 
-/** 生成前端可直接展示的模型名，如 "Gemini (gemini-2.5-flash)" / "OpenRouter (gpt-4o-mini)" */
+/** 生成前端可直接展示的模型名，如 "Gemini (gemini-1.5-flash)" / "OpenRouter (gpt-4o-mini)" */
 function buildModelLabel(provider: ProviderName, model: string): string {
   const shortModel = provider === "openrouter" ? model.split("/").pop() || model : model;
   return `${PROVIDER_DISPLAY[provider]} (${shortModel})`;
@@ -301,7 +359,7 @@ async function analyzeWithGemini(
   mealType: string,
   apiKey: string
 ): Promise<AnalysisResult> {
-  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  const model = process.env.GEMINI_MODEL || APP_CONFIG.models.vision;
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
     {
@@ -316,6 +374,11 @@ async function analyzeWithGemini(
             ],
           },
         ],
+        generationConfig: {
+          maxOutputTokens: 200,
+          responseMimeType: "application/json",
+          temperature: 0.2,
+        },
       }),
     }
   );
@@ -327,16 +390,18 @@ async function analyzeWithGemini(
 
   const data = await response.json();
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "[]";
-  const records = parseRecords(text);
+  const parsed = parseRecords(text);
+  const records = parsed.records;
 
   return {
     count: records.length,
     records,
+    total_cal: parsed.total_cal,
     model: { provider: "gemini", model, label: buildModelLabel("gemini", model), switched: false },
   };
 }
 
-/** OpenAI 兼容接口（供 OpenRouter / DeepSeek 复用） */
+/** OpenAI 兼容接口（供 OpenRouter 复用） */
 async function analyzeWithOpenAICompatible(
   base64: string,
   mimeType: string,
@@ -357,11 +422,18 @@ async function analyzeWithOpenAICompatible(
           role: "user",
           content: [
             { type: "text", text: buildPrompt(mealType) },
-            { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:${mimeType};base64,${base64}`,
+                detail: "low",
+              },
+            },
           ],
         },
       ],
-      max_tokens: 1024,
+      max_tokens: 200,
+      response_format: { type: "json_object" },
     }),
   });
 
@@ -372,11 +444,13 @@ async function analyzeWithOpenAICompatible(
 
   const data = await response.json();
   const text = data?.choices?.[0]?.message?.content || "[]";
-  const records = parseRecords(text);
+  const parsed = parseRecords(text);
+  const records = parsed.records;
 
   return {
     count: records.length,
     records,
+    total_cal: parsed.total_cal,
     model: {
       provider: options.provider,
       model: options.model,
@@ -400,36 +474,28 @@ function analyzeWithOpenRouter(
   });
 }
 
-/** C: DeepSeek（OpenAI 兼容接口；官方文本模型不支持图片时会快速失败并交回回退链） */
-function analyzeWithDeepSeek(
-  base64: string,
-  mimeType: string,
-  mealType: string,
-  apiKey: string
-): Promise<AnalysisResult> {
-  return analyzeWithOpenAICompatible(base64, mimeType, mealType, apiKey, {
-    provider: "deepseek",
-    endpoint: "https://api.deepseek.com/chat/completions",
-    model: process.env.DEEPSEEK_MODEL || "deepseek-chat",
-  });
-}
-
 /**
  * 稳健解析 AI 返回的食物 JSON：
- * 支持纯 JSON 数组、Markdown 代码块包裹、前后附带说明文字，以及
+ * 支持极简 JSON 约束结构 {"items":[...],"total_cal":N}、纯 JSON 数组、
+ * Markdown 代码块包裹、前后附带说明文字，以及
  * { records | items | foods: [...] } 等对象包装形式。
  * 解析后统一规范化为前端所需字段（食物名称/估算重量/卡路里/蛋白质/脂肪/碳水）。
  */
-function parseRecords(text: string): any[] {
+function parseRecords(text: string): { records: any[]; total_cal?: number } {
   const cleaned = text.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
 
-  const tryParse = (raw: string): any[] | null => {
+  const tryParse = (raw: string): { records: any[]; total_cal?: number } | null => {
     try {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
+      if (Array.isArray(parsed)) return { records: parsed };
       if (parsed && typeof parsed === "object") {
         for (const key of ["records", "items", "foods"]) {
-          if (Array.isArray(parsed[key])) return parsed[key];
+          if (Array.isArray(parsed[key])) {
+            return {
+              records: parsed[key],
+              total_cal: toNumber(parsed.total_cal) || undefined,
+            };
+          }
         }
       }
       return null;
@@ -439,12 +505,14 @@ function parseRecords(text: string): any[] {
   };
 
   const direct = tryParse(cleaned);
-  if (direct !== null) return normalizeRecords(direct);
+  if (direct !== null) return { records: normalizeRecords(direct.records), total_cal: direct.total_cal };
 
   const match = cleaned.match(/\[[\s\S]*\]/);
   if (match) {
     const extracted = tryParse(match[0]);
-    if (extracted !== null) return normalizeRecords(extracted);
+    if (extracted !== null) {
+      return { records: normalizeRecords(extracted.records), total_cal: extracted.total_cal };
+    }
   }
 
   throw new Error("AI 返回内容无法解析为食物 JSON 数组");
@@ -462,8 +530,8 @@ function normalizeRecords(items: any[]): any[] {
     .map((item) => ({
       food: String(item.food ?? item.name ?? item.food_name ?? item.food_en ?? "未知食物"),
       food_en: String(item.food_en ?? item.name_en ?? ""),
-      grams: toNumber(item.grams ?? item.weight_g ?? item.weight ?? item.estimated_weight_g),
-      calories: toNumber(item.calories ?? item.kcal ?? item.calorie),
+      grams: toNumber(item.grams ?? item.gram ?? item.weight_g ?? item.weight ?? item.estimated_weight_g),
+      calories: toNumber(item.calories ?? item.cal ?? item.kcal ?? item.calorie),
       protein_g: toNumber(item.protein_g ?? item.protein),
       fat_g: toNumber(item.fat_g ?? item.fat),
       carbs_g: toNumber(item.carbs_g ?? item.carbs ?? item.carbohydrates_g ?? item.carbohydrates),

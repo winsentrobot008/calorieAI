@@ -18,8 +18,9 @@
 - 样式与 UI: Tailwind CSS v4 + Lucide Icons
 - 状态与 i18n: 自定义 `LocaleInit` + `hydrated` 状态延迟加载（防 React #418）；`localStorage > navigator.language > en`
 - 支付: Stripe (信用卡/Apple Pay/Link/支付宝/微信) + PayPal (微额支付兜底)；**Credits Top-up 积分包一次性付款，无订阅**
-- AI: A→B→C 回退链（Gemini Vision → OpenRouter → DeepSeek），不返回 Mock
+- AI: A→B 回退链（Gemini Vision → OpenRouter），不返回 Mock
 - 积分: 服务端权威（识图 -1 / 广告 +10 / 积分包充值），`src/lib/db` DAL 记账
+- 成本控制: 识图/文字分析先做 Redis 限频与积分预扣；文字单一标准食物先走 MD5 Redis/本地静态库，复杂多食物才调用模型；OpenAI 兼容调用固定 `max_tokens: 200` + JSON mode
 - 持久化 (DAL): Postgres → Vercel KV/Redis → 本地文件（os.tmpdir）三机制自动降级
 - TTS: Edge-TTS (Azure Cognitive Services)
 - 部署: Vercel (Git 自动部署) + Cloudflare Wildcard DNS（`*.app008ai.com`）
@@ -71,4 +72,5 @@
 4. **文档治理**：根目录标准化为 3 个 MD —— `README.md`（对外说明）、`PROJECT_SPEC.md`（生产规格+Agent 守则+套娃 SOP）、`MEMORY.md`（记忆+自愈履历+决策）。
 5. **DAL 抽象层（决策定稿）**：订阅/积分/支付流水/识图日志/访问统计统一走 `src/lib/db` 的 `DbAdapter` 契约，Postgres → KV → 本地文件三机制自动降级；生产必须配置 Postgres 或 KV 以保证跨实例/跨设备数据永久保存。
 6. **服务端权威授权（决策定稿）**：积分余额与 Pro 权限仅由服务端 API 记账/判定，前端只消费结果；识图 -1、广告 +10、充值/Pro 解锁均为服务端权威交易。
-7. **视觉回退链（决策定稿）**：识图走 Gemini → OpenRouter → DeepSeek A→B→C 回退，任何提供商失败/缺密钥均返回明确错误，**绝不回退到 Mock 数据**。
+7. **视觉回退链（决策定稿）**：识图走 Gemini → OpenRouter A→B 回退，任何提供商失败/缺密钥均返回明确错误，**绝不回退到 Mock 数据**。
+8. **Token & Cost Control（2026-08-23）**：Pre-LLM MD5 食物缓存 + 本地标准食物库；单一标准食物走轻量路径；复杂组合才进入模型；所有 meal API 在下游前执行 Redis 限频与服务端积分预扣，余额不足返回 402。

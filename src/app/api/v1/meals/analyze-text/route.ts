@@ -3,9 +3,11 @@ import { getClientIp, checkAntiCrawler, rateLimitRequest } from "@/lib/anti-craw
 import { db } from "@/lib/db";
 import { createGatewayClient } from "@/lib/gateway-client";
 import { APP_CONFIG } from "@/lib/app-config";
+import { findLocalFoodInText, getFoodCache, setFoodCache } from "@/lib/cache/foodCache";
+import { reserveMealCredit } from "@/lib/cost-control";
 
 // 中央网关接入（可选）：配置 GATEWAY_BASE_URL + GATEWAY_APP_KEY 时优先走统一文字分析端点；
-// 网关未配置或不可用时自动回退直连 Gemini / OpenRouter / DeepSeek，避免报错或返回空值。
+// 网关未配置或不可用时自动回退直连 Gemini / OpenRouter，避免报错或返回空值。
 const gateway = createGatewayClient({
   baseUrl: process.env.GATEWAY_BASE_URL || "",
   appId: "calorieai",
@@ -27,10 +29,9 @@ const gateway = createGatewayClient({
  *     model: { provider, model, label, switched, attempts, gateway? }
  *   }
  *
- * 提供商 A → B → C 自动回退链（任一成功即返回真实估算）:
+ * 提供商 A → B 自动回退链（任一成功即返回真实估算）:
  *   A: GEMINI_API_KEY      → Google Gemini（文本生成）
  *   B: OPENROUTER_API_KEY  → OpenRouter 聚合模型（OpenAI 兼容）
- *   C: DEEPSEEK_API_KEY    → DeepSeek（OpenAI 兼容）
  * 全部失败返回可诊断错误，绝不回退固定 Mock 数据。
  */
 export async function POST(request: NextRequest) {
@@ -91,6 +92,39 @@ export async function POST(request: NextRequest) {
     }
     console.log(`[Text] 收到分析请求: ip=${ip} meal_type=${mealType} text="${text.slice(0, 80)}..."`);
 
+    const localFoodName = findLocalFoodInText(text);
+    if (localFoodName && !/[和与,，、及&]/.test(text.replace(localFoodName, ""))) {
+      const cached = await getFoodCache([localFoodName]);
+      if (cached) {
+        const record = cached[0];
+        return NextResponse.json({
+          count: 1,
+          records: [record],
+          items: [record],
+          totalKcal: record.calories,
+          totalProtein: record.protein_g,
+          totalFat: record.fat_g,
+          totalCarbs: record.carbs_g,
+          model: { provider: "local", model: "static-food-db", label: "Local Food DB", switched: false, attempts: 0 },
+        });
+      }
+    }
+
+    const userId = String(body?.user_id || request.headers.get("x-user-id") || "anonymous");
+    const creditGuard = await reserveMealCredit(userId, ip);
+    if (!creditGuard.allowed) {
+      return NextResponse.json(
+        {
+          detail: creditGuard.status === 402 ? "积分不足，请先充值" : "请求过于频繁，请稍后再试",
+          code: creditGuard.code,
+        },
+        {
+          status: creditGuard.status,
+          headers: creditGuard.retryAfter ? { "Retry-After": String(creditGuard.retryAfter) } : undefined,
+        }
+      );
+    }
+
     // ── 中央网关优先：统一文字分析（失败自动回退直连）──
     if (gateway.isConfigured()) {
       try {
@@ -111,7 +145,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // ── A → B → C 直连回退链 ──
+    // ── A → B 直连回退链 ──
     const providers: TextProvider[] = [
       {
         name: "gemini",
@@ -126,16 +160,6 @@ export async function POST(request: NextRequest) {
             provider: "openrouter",
             endpoint: "https://openrouter.ai/api/v1/chat/completions",
             model: process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini",
-          }),
-      },
-      {
-        name: "deepseek",
-        apiKey: process.env.DEEPSEEK_API_KEY,
-        analyze: (apiKey) =>
-          analyzeTextWithOpenAICompatible(text, mealType, apiKey, {
-            provider: "deepseek",
-            endpoint: "https://api.deepseek.com/chat/completions",
-            model: process.env.DEEPSEEK_MODEL || "deepseek-chat",
           }),
       },
     ];
@@ -162,6 +186,8 @@ export async function POST(request: NextRequest) {
           latency_ms: Date.now() - startTime,
           count: result.count,
         });
+        const cacheNames = result.records.map((record) => String(record.food || "")).filter(Boolean);
+        if (cacheNames.length) await setFoodCache(cacheNames, result.records);
         return NextResponse.json(payload);
       } catch (err: any) {
         lastError = err;
@@ -187,7 +213,7 @@ export async function POST(request: NextRequest) {
     }
 
     // ── 无任何密钥：明确报错 ──
-    console.warn("[Text] No API key configured (GEMINI_API_KEY / OPENROUTER_API_KEY / DEEPSEEK_API_KEY)");
+    console.warn("[Text] No API key configured (GEMINI_API_KEY / OPENROUTER_API_KEY)");
     await db.recordVisionLog({
       ip,
       provider: "api",
@@ -198,7 +224,7 @@ export async function POST(request: NextRequest) {
     });
     return NextResponse.json(
       {
-        detail: "未配置 AI 文本密钥（GEMINI_API_KEY / OPENROUTER_API_KEY / DEEPSEEK_API_KEY），无法分析",
+        detail: "未配置 AI 文本密钥（GEMINI_API_KEY / OPENROUTER_API_KEY），无法分析",
         code: "NO_TEXT_KEY",
       },
       { status: 503 }
@@ -219,7 +245,7 @@ export async function POST(request: NextRequest) {
 
 // ─── 提供商封装（与 analyze-image 同构，文本版） ──────────────────────
 
-type TextProviderName = "gemini" | "openrouter" | "deepseek";
+type TextProviderName = "gemini" | "openrouter";
 
 interface TextAnalysisResult {
   count: number;
@@ -247,7 +273,6 @@ interface FoodRecord {
 const PROVIDER_DISPLAY: Record<TextProviderName, string> = {
   gemini: "Gemini",
   openrouter: "OpenRouter",
-  deepseek: "DeepSeek",
 };
 
 function buildModelLabel(provider: TextProviderName, model: string): string {
@@ -260,13 +285,13 @@ function buildTextPrompt(text: string, mealType: string): string {
   return APP_CONFIG.prompts.text(text, mealType);
 }
 
-/** A: Google Gemini（文本生成） */
+/** A: Google Gemini（文本生成，默认低成本模型 gemini-1.5-flash） */
 async function analyzeTextWithGemini(
   text: string,
   mealType: string,
   apiKey: string
 ): Promise<TextAnalysisResult> {
-  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  const model = process.env.GEMINI_MODEL || APP_CONFIG.models.text;
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
     {
@@ -274,6 +299,11 @@ async function analyzeTextWithGemini(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text: buildTextPrompt(text, mealType) }] }],
+        generationConfig: {
+          maxOutputTokens: 200,
+          responseMimeType: "application/json",
+          temperature: 0.2,
+        },
       }),
     }
   );
@@ -290,7 +320,7 @@ async function analyzeTextWithGemini(
   };
 }
 
-/** OpenAI 兼容接口（OpenRouter / DeepSeek 文本对话） */
+/** OpenAI 兼容接口（OpenRouter 文本对话） */
 async function analyzeTextWithOpenAICompatible(
   text: string,
   mealType: string,
@@ -306,7 +336,8 @@ async function analyzeTextWithOpenAICompatible(
     body: JSON.stringify({
       model: options.model,
       messages: [{ role: "user", content: buildTextPrompt(text, mealType) }],
-      max_tokens: 1024,
+      max_tokens: 200,
+      response_format: { type: "json_object" },
     }),
   });
   if (!response.ok) {
@@ -357,8 +388,8 @@ function parseFoodRecords(text: string): FoodRecord[] {
       .map((raw) => ({
         food: String(raw.food ?? raw.name ?? raw.food_name ?? raw.food_en ?? "未知"),
         food_en: String(raw.food_en ?? raw.name_en ?? ""),
-        grams: toNum(raw.grams ?? raw.weight_g ?? raw.weight ?? raw.estimated_weight_g),
-        calories: toNum(raw.calories ?? raw.kcal ?? raw.calorie),
+        grams: toNum(raw.grams ?? raw.gram ?? raw.weight_g ?? raw.weight ?? raw.estimated_weight_g),
+        calories: toNum(raw.calories ?? raw.cal ?? raw.kcal ?? raw.calorie),
         protein_g: toNum(raw.protein_g ?? raw.protein),
         fat_g: toNum(raw.fat_g ?? raw.fat),
         carbs_g: toNum(raw.carbs_g ?? raw.carbs ?? raw.carbohydrates_g ?? raw.carbohydrates),

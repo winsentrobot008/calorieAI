@@ -473,7 +473,7 @@ export function AdminDashboardPanel({
                 color: "#94a3b8",
               }}
             >
-              <div>ai_provider: A→B→C (Gemini / OpenRouter / DeepSeek)</div>
+              <div>ai_provider: A→B (Gemini / OpenRouter)</div>
               <div>max_recognitions_per_day: 10</div>
               <div>waf_rate_limit: 6 req/min/IP</div>
               <div>test_price: $1.00</div>

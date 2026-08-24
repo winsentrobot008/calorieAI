@@ -47,7 +47,7 @@
 
 | 规范 | 要求 | 落地方式 |
 |------|------|---------|
-| **代码层面零 Key** | 敏感密钥（Stripe/PayPal、Gemini/OpenRouter/DeepSeek、KV/Postgres）一律 `process.env.*` 读取，禁止硬编码 | 全部路由/适配器经 `process.env.X` 注入；`.env.example` 为唯一变量清单 |
+| **代码层面零 Key** | 敏感密钥（Stripe/PayPal、Gemini/OpenRouter、KV/Postgres）一律 `process.env.*` 读取，禁止硬编码 | 全部路由/适配器经 `process.env.X` 注入；`.env.example` 为唯一变量清单 |
 | **服务端权威** | 积分、Pro 权限、支付流水由服务端 DAL 判定，前端只消费 API 结果 | `POST /api/v1/user/credits`、`billing/status`、`recordPayment` 统一收口 |
 | **可移植部署** | 克隆后导入 Vercel 即可 1 分钟构建上线 | `vercel.json` 显式声明 framework / build / install；`next build` 内置路由门禁 |
 
@@ -106,7 +106,7 @@ rg -o "process\.env\.[A-Z_]+" src | sort -u
 ```
 拍照 / 上传食物图片
    ↓
-A→B→C 视觉回退链识别 (Gemini → OpenRouter → DeepSeek)
+A→B 视觉回退链识别 (Gemini → OpenRouter)
    ↓
 服务端鉴权: 免费额度? → 积分余额?   （服务端权威 · 1 积分/次）
    ↓
@@ -216,7 +216,7 @@ Stripe Checkout 真实收款，支持：
 | **状态与 i18n** | 自定义 `LocaleInit` + `hydrated` 状态延迟加载（防 React #418） |
 | **支付 (主)** | Stripe — 信用卡 / Apple Pay / Link / 支付宝 / 微信支付 |
 | **支付 (辅)** | PayPal SDK (`@paypal/react-paypal-js`) — 微额支付兜底 |
-| **AI 视觉** | A→B→C 回退链：Google Gemini Vision → OpenRouter → DeepSeek |
+| **AI 视觉** | A→B 回退链：Google Gemini Vision → OpenRouter |
 | **TTS 语音** | Edge-TTS (Azure Cognitive Services) |
 | **持久化 (DAL)** | Postgres / Vercel KV (Redis) / 本地文件 三机制自动降级 |
 | **中央网关** | [`projects/central-gateway`](../../projects/central-gateway/README.md) SDK 接入示例（`src/lib/gateway-client.ts`） |
@@ -292,21 +292,19 @@ npm run dev
 | 5 | `PAYPAL_CLIENT_SECRET` | 可选 | PayPal 服务端密钥 |
 | 6 | `PAYPAL_API_URL` | 可选 | PayPal API 地址（Sandbox/Live） |
 | 7 | `GEMINI_API_KEY` | 推荐 | Gemini Vision 密钥（A 提供商） |
-| 8 | `GEMINI_MODEL` | 可选 | Gemini 模型（默认 `gemini-2.0-flash`） |
+| 8 | `GEMINI_MODEL` | 可选 | Gemini 模型（默认 `gemini-1.5-flash` 低成本视觉模型） |
 | 9 | `OPENROUTER_API_KEY` | 可选 | OpenRouter 密钥（B 提供商） |
 | 10 | `OPENROUTER_MODEL` | 可选 | OpenRouter 模型（默认 `openai/gpt-4o-mini`） |
-| 11 | `DEEPSEEK_API_KEY` | 可选 | DeepSeek 密钥（C 提供商） |
-| 12 | `DEEPSEEK_MODEL` | 可选 | DeepSeek 模型（默认 `deepseek-chat`） |
-| 13 | `POSTGRES_URL` / `DATABASE_URL` | 推荐 | Postgres 连接串（Vercel Postgres / Neon / Supabase） |
-| 14 | `POSTGRES_SSL` | 可选 | Postgres SSL 开关（默认开启） |
-| 15 | `KV_REST_API_URL` / `VERCEL_KV_REST_API_URL` / `UPSTASH_REDIS_REST_URL` | 可选 | KV REST 地址 |
-| 16 | `KV_REST_API_TOKEN` / `VERCEL_KV_REST_API_TOKEN` / `UPSTASH_REDIS_REST_TOKEN` | 可选 | KV REST Token |
-| 17 | `REDIS_URL` | 可选 | 标准 Redis 连接串（预留直连适配） |
-| 18 | `GATEWAY_BASE_URL` / `GATEWAY_APP_KEY` | 可选 | Central Gateway 接入（服务端：识图/积分经统一网关） |
-| 19 | `NEXT_PUBLIC_GATEWAY_BASE_URL` / `NEXT_PUBLIC_GATEWAY_APP_KEY` | 可选 | 同上（前端直调网关时） |
-| 20 | `NEXT_PUBLIC_APP_URL` | 可选 | 前端站点绝对地址（Webhook/回调与链接生成） |
-| 21 | `TTS_SUBSCRIPTION_KEY` | 可选 | Azure Edge-TTS 密钥 |
-| 22 | `VITE_GOOGLE_CLIENT_ID` | 可选 | Google OAuth Client ID |
+| 11 | `POSTGRES_URL` / `DATABASE_URL` | 推荐 | Postgres 连接串（Vercel Postgres / Neon / Supabase） |
+| 12 | `POSTGRES_SSL` | 可选 | Postgres SSL 开关（默认开启） |
+| 13 | `KV_REST_API_URL` / `VERCEL_KV_REST_API_URL` / `UPSTASH_REDIS_REST_URL` | 可选 | KV REST 地址 |
+| 14 | `KV_REST_API_TOKEN` / `VERCEL_KV_REST_API_TOKEN` / `UPSTASH_REDIS_REST_TOKEN` | 可选 | KV REST Token |
+| 15 | `REDIS_URL` | 可选 | 标准 Redis 连接串（预留直连适配） |
+| 16 | `GATEWAY_BASE_URL` / `GATEWAY_APP_KEY` | 可选 | Central Gateway 接入（服务端：识图/积分经统一网关） |
+| 17 | `NEXT_PUBLIC_GATEWAY_BASE_URL` / `NEXT_PUBLIC_GATEWAY_APP_KEY` | 可选 | 同上（前端直调网关时） |
+| 18 | `NEXT_PUBLIC_APP_URL` | 可选 | 前端站点绝对地址（Webhook/回调与链接生成） |
+| 19 | `TTS_SUBSCRIPTION_KEY` | 可选 | Azure Edge-TTS 密钥 |
+| 20 | `VITE_GOOGLE_CLIENT_ID` | 可选 | Google OAuth Client ID |
 
 > 最小必填集：**#1/#2（Stripe 双 Key）+ #7（AI）**；生产强烈建议加 **#13（Postgres）** 与 **#3（Webhook Secret）**。
 
@@ -362,6 +360,21 @@ node scripts/test-stripe-e2e.mjs       # 支付全链路 E2E
 | `POST` | `/api/v1/meals/analyze-image` | AI 图片食物识别（A→B→C 回退链，WAF 限频 + 反爬） |
 | `POST` | `/api/v1/meals/analyze-text` | AI 文字食物识别 |
 | `GET/POST` | `/api/v1/user/credits` | 积分查询 / 服务端增减（识图 -1、广告 +10、积分包充值） |
+
+### Vision API 降本规范（v1）
+
+> 目标：在保证识别准确率的前提下，将视觉识别单次调用成本降到最低。
+
+| 降本措施 | 规范 | 落地位置 |
+|----------|------|---------|
+| **前端 Canvas 压缩** | 最长边 ≤ **768px**、JPEG **quality 0.7**、体积 ≤ **200KB**；逐级降质/降边长兜底，超限报 `STILL_TOO_LARGE` | [`src/lib/image-utils.ts`](src/lib/image-utils.ts)（`handleAnalyze` 上传前调用） |
+| **低成本模型路由** | 默认视觉模型 **`gemini-1.5-flash`**（`GEMINI_MODEL` 可覆盖）；OpenRouter 兜底 `openai/gpt-4o-mini` | [`src/app/api/v1/meals/analyze-image/route.ts`](src/app/api/v1/meals/analyze-image/route.ts) |
+| **请求参数收紧** | OpenAI 兼容接口 `max_tokens: 100` + `image_url.detail: "low"`；Gemini 原生接口不传长输出 | 同上 |
+| **极简 JSON 约束** | System Prompt 禁止 Markdown/解释文字，仅允许返回 `{"items":[{"name":"string","cal":0,"gram":0}],"total_cal":0}` | [`src/lib/app-config.ts`](src/lib/app-config.ts) `prompts.image` |
+| **每日频控** | 单 IP **30 次/日**（滑动窗口 24h）+ 每分钟 6 次双闸门；超限返回 `DAILY_RATE_LIMITED` / `RATE_LIMITED` | [`src/lib/anti-crawler.ts`](src/lib/anti-crawler.ts) + analyze-image 路由 |
+| **服务端体积兜底** | 后端拒绝 >200KB 的图片（`IMAGE_TOO_LARGE`），防绕过客户端压缩 | analyze-image 路由 |
+
+> ⚠️ 网关路径（配置 `GATEWAY_BASE_URL` 后识图优先走 Central Gateway）：请求参数与 Prompt 由网关侧控制，本仓库 `app-config.ts` 的 Prompt 需与网关 PROMPTS 表保持同步；客户端压缩与每日频控在本仓库路由层仍然生效。
 
 ### 运维后台（需管理员令牌）
 
@@ -424,7 +437,7 @@ python scripts/ceo_visual_demo.py --url http://127.0.0.1:3100
 巡检覆盖：步骤 A 语言与导航（中文/EN + 三页面）、步骤 B 餐次全覆盖（早餐/午餐/晚餐/加餐）、
 步骤 C 文字与识图（逐字输入 + 积分 -1 记录；TEMP 图片「图片已优化 (XXKB)」Toast + 数量/约重 + 整盘总热量）、
 步骤 D 商业化（看广告 +10、Stripe 3 套定价卡片与 Checkout 跳转）。
-规范详见 [`git008/docs/AI_FACTORY_SPEC.md`](../../docs/AI_FACTORY_SPEC.md)（SOP-01 轨迹光标巡检 / SOP-02 数量清点总账 / SOP-03 500KB 压缩防爆）。
+规范详见 [`git008/docs/AI_FACTORY_SPEC.md`](../../docs/AI_FACTORY_SPEC.md)（SOP-01 轨迹光标巡检 / SOP-02 数量清点总账 / SOP-03 200KB 压缩防爆）。
 
 ---
 
@@ -476,7 +489,7 @@ python scripts/ceo_visual_demo.py --url http://127.0.0.1:3100
 | [`../../projects/central-gateway/README.md`](../../projects/central-gateway/README.md) | **SaaS Central Gateway**：统一 AI/支付/积分网关与密钥集中托管 |
 | [`scripts/check-stripe-config.mjs`](scripts/check-stripe-config.mjs) | Stripe 配置检测工具 |
 | [`scripts/test-stripe-e2e.mjs`](scripts/test-stripe-e2e.mjs) | 支付全链路 E2E 测试 |
-| [`../../docs/AI_FACTORY_SPEC.md`](../../docs/AI_FACTORY_SPEC.md) | **AI 工厂 SOP 说明书**：slowMo=1200ms 轨迹光标巡检 / Vision 数量清点总账 / Canvas 500KB 压缩防爆 |
+| [`../../docs/AI_FACTORY_SPEC.md`](../../docs/AI_FACTORY_SPEC.md) | **AI 工厂 SOP 说明书**：slowMo=1200ms 轨迹光标巡检 / Vision 数量清点总账 / Canvas 200KB 压缩防爆 |
 
 ---
 
