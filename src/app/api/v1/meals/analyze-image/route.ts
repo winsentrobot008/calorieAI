@@ -7,7 +7,7 @@ import {
 } from "@/lib/anti-crawler";
 import { db } from "@/lib/db";
 import { createGatewayClient } from "@/lib/gateway-client";
-import { APP_CONFIG } from "@/lib/app-config";
+import { APP_CONFIG, normalizeGeminiModel } from "@/lib/app-config";
 import { reserveMealCredit } from "@/lib/cost-control";
 
 // 中央网关接入（可选）：配置 GATEWAY_BASE_URL + GATEWAY_APP_KEY 时启用
@@ -24,7 +24,8 @@ const gateway = createGatewayClient({
  *
  * 模型配置:
  *   - GEMINI_API_KEY    → Google Gemini Vision
- *   - GEMINI_MODEL      （默认取 APP_CONFIG.models.vision = gemini-1.5-flash，低成本视觉模型）
+ *   - GEMINI_MODEL      （默认取 APP_CONFIG.models.vision = gemini-1.5-flash，低成本视觉模型；
+ *                         会自动剥离误配的 "models/" 前缀，模型 ID 必须是裸名称）
  *
  * Vision API 降本规范（v1）：
  *   - Gemini 原生接口 generationConfig.maxOutputTokens=200；
@@ -322,7 +323,7 @@ async function analyzeWithGemini(
   mealType: string,
   apiKey: string
 ): Promise<AnalysisResult> {
-  const model = process.env.GEMINI_MODEL || APP_CONFIG.models.vision;
+  const model = normalizeGeminiModel(process.env.GEMINI_MODEL || APP_CONFIG.models.vision);
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
     {

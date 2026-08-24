@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getClientIp, checkAntiCrawler, rateLimitRequest } from "@/lib/anti-crawler";
 import { db } from "@/lib/db";
 import { createGatewayClient } from "@/lib/gateway-client";
-import { APP_CONFIG } from "@/lib/app-config";
+import { APP_CONFIG, normalizeGeminiModel } from "@/lib/app-config";
 import { findLocalFoodInText, getFoodCache, setFoodCache } from "@/lib/cache/foodCache";
 import { reserveMealCredit } from "@/lib/cost-control";
 
@@ -250,13 +250,13 @@ function buildTextPrompt(text: string, mealType: string): string {
   return APP_CONFIG.prompts.text(text, mealType);
 }
 
-/** Google Gemini（文本生成，默认低成本模型 gemini-1.5-flash） */
+/** Google Gemini（文本生成，默认低成本模型 gemini-1.5-flash，模型 ID 自动剥离 "models/" 前缀） */
 async function analyzeTextWithGemini(
   text: string,
   mealType: string,
   apiKey: string
 ): Promise<TextAnalysisResult> {
-  const model = process.env.GEMINI_MODEL || APP_CONFIG.models.text;
+  const model = normalizeGeminiModel(process.env.GEMINI_MODEL || APP_CONFIG.models.text);
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
     {

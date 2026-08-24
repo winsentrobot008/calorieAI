@@ -17,7 +17,11 @@ export const APP_CONFIG = {
   /** 中文品牌名 */
   appNameZh: "卡路里助手",
 
-  /** AI 模型默认值（DeepSeek 已移除，统一使用 Google Gemini 低成本模型） */
+  /**
+   * AI 模型默认值（DeepSeek 已移除，统一使用 Google Gemini 低成本模型）。
+   * 值必须是裸模型 ID（如 "gemini-1.5-flash"），严禁带 "models/" 前缀，
+   * 否则会拼出 /v1beta/models/models/gemini-1.5-flash 双路径导致 API 404。
+   */
   models: {
     /** 识图模型：gemini-1.5-flash（原生多模态，单次调用完成食物识别 + 营养 JSON） */
     vision: "gemini-1.5-flash",
@@ -66,3 +70,11 @@ confidence:0~1置信度
     accent: "#60a5fa", // 辅色（信息/链接）
   },
 };
+
+/**
+ * 规范化 Gemini 模型 ID：剥离可能误配的 "models/" 前缀（可多次出现），
+ * 确保请求 URL 恒为 /v1beta/models/<model>:generateContent，杜绝双 /models/ 404。
+ */
+export function normalizeGeminiModel(raw: string): string {
+  return raw.trim().replace(/^(?:models\/)+/, "");
+}
