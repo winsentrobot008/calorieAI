@@ -21,7 +21,7 @@ import ts from "typescript";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const guardPath = path.resolve(
   here,
-  "../../../projects/commercial-engine/middleware/llm-token-guard.ts"
+  "../src/lib/commercial-engine/middleware/llm-token-guard.ts"
 );
 
 const source = fs.readFileSync(guardPath, "utf8");

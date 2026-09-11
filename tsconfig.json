@@ -20,7 +20,7 @@
     ],
     "paths": {
       "@/*": ["./src/*"],
-      "@commercial-engine/*": ["../../projects/commercial-engine/*"]
+      "@commercial-engine/*": ["./src/lib/commercial-engine/*"]
     }
   },
   "include": [

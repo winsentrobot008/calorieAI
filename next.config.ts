@@ -1,11 +1,9 @@
-import path from "path";
 import type { NextConfig } from "next";
 
-const nextConfig: NextConfig = {
-  /* 商业引擎位于仓库根（git008），Turbopack 需显式声明 monorepo root 才能解析其外部模块 */
-  turbopack: {
-    root: path.resolve(process.cwd(), "../.."),
-  },
-};
+/**
+ * CalorieAI 为自包含项目：商业引擎源码已内联至 ./src/lib/commercial-engine，
+ * 无需再声明跨父仓（git008）的 Turbopack monorepo root。
+ */
+const nextConfig: NextConfig = {};
 
 export default nextConfig;
