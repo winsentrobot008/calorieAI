@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getClientIp } from "@/lib/anti-crawler";
 import { db } from "@/lib/db";
+import { recordTrafficEvent } from "@/lib/traffic-analytics";
 
 /**
  * POST /api/v1/track/visit
@@ -11,11 +12,14 @@ import { db } from "@/lib/db";
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
+    const ip = getClientIp(request);
     await db.recordVisit({
-      ip: getClientIp(request),
+      ip,
       ua: request.headers.get("user-agent") || "",
       path: body.path || "/",
     });
+    // 每日独立访客（IP）统计：仅登记访客集合，不计入请求分类
+    await recordTrafficEvent("visit", ip);
     return NextResponse.json({ status: "ok" });
   } catch (error: any) {
     console.error("[Track Visit Error]", error);

@@ -72,6 +72,74 @@ export function AdminLoginPanel({ onLogin }: { onLogin: (s: any) => void }) {
 }
 
 // ─── Admin Dashboard ───────────────────────────────────────────────────
+/** 功能开关默认卡片：KV 暂不可用时仍保证控制卡片可操作 */
+const DEFAULT_FLAGS = [
+  { key: "FEATURE_VISION_ENABLED", enabled: false, default_enabled: false },
+];
+
+/** 轻量流量趋势图：堆叠柱状图（分类请求量）+ 折线图（独立访客），零第三方依赖 */
+function TrafficChart({ daily }: { daily: any[] }) {
+  const points = (Array.isArray(daily) ? daily : []).filter(Boolean);
+  if (!points.length) {
+    return <div className="admin-chart-empty">{t("admin_no_data")}</div>;
+  }
+  const maxTotal = Math.max(
+    1,
+    ...points.map((p) => Number(p.text || 0) + Number(p.image || 0) + Number(p.blocked_429 || 0))
+  );
+  const maxVisitors = Math.max(1, ...points.map((p) => Number(p.unique_visitors || 0)));
+  const linePoints = points
+    .map((p, i) => {
+      const x = points.length > 1 ? (i / (points.length - 1)) * 100 : 50;
+      const y = 100 - (Number(p.unique_visitors || 0) / maxVisitors) * 100;
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+  const showLabel = (i: number) =>
+    points.length <= 10 || i === 0 || i === points.length - 1 || i % 5 === 0;
+
+  return (
+    <div className="admin-chart">
+      <div className="admin-chart-legend">
+        <span className="admin-chart-swatch text" /> {t("admin_chart_text")}
+        <span className="admin-chart-swatch image" /> {t("admin_chart_image")}
+        <span className="admin-chart-swatch blocked" /> {t("admin_chart_blocked")}
+      </div>
+      <div className="admin-chart-bars">
+        {points.map((p: any, i: number) => (
+          <div
+            className="admin-chart-col"
+            key={p.date || i}
+            title={`${p.date} · ${t("admin_chart_text")} ${p.text || 0} · ${t("admin_chart_image")} ${
+              p.image || 0
+            } · ${t("admin_chart_blocked")} ${p.blocked_429 || 0} · ${t("admin_chart_visitors")} ${
+              p.unique_visitors || 0
+            }`}
+          >
+            <div className="admin-chart-stack">
+              <div className="admin-chart-bar text" style={{ height: `${(Number(p.text || 0) / maxTotal) * 100}%` }} />
+              <div className="admin-chart-bar image" style={{ height: `${(Number(p.image || 0) / maxTotal) * 100}%` }} />
+              <div
+                className="admin-chart-bar blocked"
+                style={{ height: `${(Number(p.blocked_429 || 0) / maxTotal) * 100}%` }}
+              />
+            </div>
+            <div className="admin-chart-x">{showLabel(i) ? String(p.date || "").slice(5) : ""}</div>
+          </div>
+        ))}
+      </div>
+      <div className="admin-chart-line-wrap">
+        <div className="admin-chart-line-title">
+          {t("admin_chart_visitors")} · max {maxVisitors}
+        </div>
+        <svg className="admin-chart-line" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+          <polyline points={linePoints} vectorEffect="non-scaling-stroke" />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
 export function AdminDashboardPanel({
   session,
   onLogout,
@@ -87,21 +155,26 @@ export function AdminDashboardPanel({
     logs: [],
     users: [],
     models: null,
+    flags: DEFAULT_FLAGS,
   });
   const [refreshing, setRefreshing] = useState(false);
+  const [trafficDays, setTrafficDays] = useState(7);
+  const [savingFlag, setSavingFlag] = useState("");
+  const [flagError, setFlagError] = useState("");
 
   const load = useCallback(async () => {
     const headers = { "x-admin-token": session?.token || "" };
     setRefreshing(true);
     try {
-      const [overview, revenue, traffic, logsRes, usersRes, models] =
+      const [overview, revenue, traffic, logsRes, usersRes, models, configRes] =
         await Promise.all([
           fetch("/api/v1/admin/overview", { headers }).then((r) => r.json()),
           fetch("/api/v1/admin/revenue", { headers }).then((r) => r.json()),
-          fetch("/api/v1/admin/traffic", { headers }).then((r) => r.json()),
+          fetch(`/api/v1/admin/traffic?days=${trafficDays}`, { headers }).then((r) => r.json()),
           fetch("/api/v1/admin/logs", { headers }).then((r) => r.json()),
           fetch("/api/v1/admin/users", { headers }).then((r) => r.json()),
           fetch("/api/v1/admin/model-monitor", { headers }).then((r) => r.json()),
+          fetch("/api/v1/admin/config", { headers }).then((r) => r.json()),
         ]);
       setData({
         overview,
@@ -110,12 +183,38 @@ export function AdminDashboardPanel({
         logs: logsRes.logs || [],
         users: usersRes.users || [],
         models,
+        flags: configRes?.flags?.length ? configRes.flags : DEFAULT_FLAGS,
       });
     } catch (err) {
       console.error("[Admin] 数据加载失败:", err);
     }
     setRefreshing(false);
-  }, [session?.token]);
+  }, [session?.token, trafficDays]);
+
+  /** 一键切换功能开关（实时写入 KV，成功后立刻回填服务端最新状态） */
+  const toggleFlag = useCallback(
+    async (key: string, next: boolean) => {
+      setSavingFlag(key);
+      setFlagError("");
+      try {
+        const res = await fetch("/api/v1/admin/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-admin-token": session?.token || "" },
+          body: JSON.stringify({ key, value: next }),
+        });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(payload.detail || t("admin_flag_failed"));
+        setData((prev: any) => ({
+          ...prev,
+          flags: payload.flags?.length ? payload.flags : prev.flags,
+        }));
+      } catch (err: any) {
+        setFlagError(err?.message || t("admin_flag_failed"));
+      }
+      setSavingFlag("");
+    },
+    [session?.token]
+  );
 
   useEffect(() => {
     load();
@@ -207,6 +306,23 @@ export function AdminDashboardPanel({
               <div className="admin-stat-label">{t("admin_unique_ips")}</div>
               <div className="admin-stat-value">{tr.unique_ips ?? 0}</div>
             </div>
+          </div>
+          <div className="card" style={{ marginTop: 12 }}>
+            <div className="admin-chart-head">
+              <div className="card-title">{t("admin_traffic_trend")}</div>
+              <div className="admin-range">
+                {[7, 30].map((d) => (
+                  <button
+                    key={d}
+                    className={`admin-range-btn ${trafficDays === d ? "active" : ""}`}
+                    onClick={() => setTrafficDays(d)}
+                  >
+                    {d === 7 ? t("admin_last_7_days") : t("admin_last_30_days")}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <TrafficChart daily={tr.daily || []} />
           </div>
           <div className="card" style={{ marginTop: 12 }}>
             <div className="card-title">{t("admin_recent_ips")}</div>
@@ -478,6 +594,39 @@ export function AdminDashboardPanel({
               <div>waf_rate_limit: 6 req/min/IP</div>
               <div>test_price: $1.00</div>
             </div>
+          </div>
+          <div className="admin-config-form" style={{ marginTop: 16 }}>
+            <h4>{t("admin_feature_flags")}</h4>
+            {(data.flags?.length ? data.flags : DEFAULT_FLAGS).map((f: any) => (
+              <div className="admin-flag-card" key={f.key}>
+                <div className="admin-flag-info">
+                  <div className="admin-flag-title">
+                    {t("admin_vision_flag_title")}
+                    <span className={`admin-status ${f.enabled ? "active" : "error"}`}>
+                      {f.enabled ? t("admin_flag_enabled") : t("admin_flag_disabled")}
+                    </span>
+                  </div>
+                  <div className="admin-flag-desc">{t("admin_vision_flag_desc")}</div>
+                  <div className="admin-flag-key">{f.key}</div>
+                </div>
+                <button
+                  className={`admin-toggle ${f.enabled ? "on" : ""}`}
+                  disabled={savingFlag === f.key}
+                  onClick={() => toggleFlag(f.key, !f.enabled)}
+                >
+                  {savingFlag === f.key
+                    ? t("admin_flag_updating")
+                    : f.enabled
+                      ? t("admin_flag_off")
+                      : t("admin_flag_on")}
+                </button>
+              </div>
+            ))}
+            {flagError ? (
+              <p className="admin-login-error">{flagError}</p>
+            ) : (
+              <div className="admin-flag-hint">{t("admin_flag_synced")}</div>
+            )}
           </div>
         </div>
       );

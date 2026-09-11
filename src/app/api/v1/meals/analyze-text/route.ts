@@ -22,6 +22,7 @@ import {
   guardSystemPrompt,
   logTokenGuard,
 } from "@/lib/model-guard";
+import { recordTrafficEvent } from "@/lib/traffic-analytics";
 
 /** DeepSeek 调用超时（毫秒）：防止上游挂起长期占用 Serverless 实例 */
 const DEEPSEEK_TIMEOUT_MS = 15_000;
@@ -83,6 +84,7 @@ export async function POST(request: NextRequest) {
     // ── 单 IP 频次限制（Upstash 分布式优先，未配置时回退进程内） ──
     const rl = await rateLimitRequestDistributed(ip);
     if (!rl.allowed) {
+      await recordTrafficEvent("blocked", ip);
       await db.recordVisionLog({
         ip,
         provider: "api",
@@ -100,6 +102,7 @@ export async function POST(request: NextRequest) {
     // ── 单 IP 每日 30 次硬上限（与 analyze-image 对齐，防成本失控） ──
     const daily = await dailyRateLimitRequestDistributed(ip);
     if (!daily.allowed) {
+      await recordTrafficEvent("blocked", ip);
       await db.recordVisionLog({
         ip,
         provider: "api",
@@ -175,6 +178,7 @@ export async function POST(request: NextRequest) {
       adminToken: request.headers.get("x-admin-token"),
     });
     if (!trial.allowed) {
+      await recordTrafficEvent("blocked", ip);
       await db.recordVisionLog({
         ip,
         provider: "waf",
@@ -189,6 +193,8 @@ export async function POST(request: NextRequest) {
       );
     }
     trialReserved = true;
+    // 每日请求分类统计：通过全部闸门的文本分析量（best-effort，绝不影响主流程）
+    await recordTrafficEvent("text", ip);
 
     let remainingCredits = 0;
     if (isAdmin) {

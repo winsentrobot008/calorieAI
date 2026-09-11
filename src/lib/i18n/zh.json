@@ -275,5 +275,22 @@
   "admin_recent_payments": "最近支付流水",
   "admin_subscription_revenue": "订阅收入",
   "admin_license_revenue": "买断收入",
-  "admin_invoices": "发票数"
+  "admin_invoices": "发票数",
+  "admin_feature_flags": "功能开关",
+  "admin_vision_flag_title": "普通用户 AI 识图开关",
+  "admin_vision_flag_desc": "关闭后普通用户识图接口返回 403，管理员始终豁免",
+  "admin_flag_enabled": "已开启",
+  "admin_flag_disabled": "已关闭",
+  "admin_flag_on": "开启",
+  "admin_flag_off": "关闭",
+  "admin_flag_updating": "切换中…",
+  "admin_flag_synced": "已实时同步至 KV 存储",
+  "admin_flag_failed": "切换失败，请重试",
+  "admin_traffic_trend": "请求趋势",
+  "admin_last_7_days": "过去 7 天",
+  "admin_last_30_days": "过去 30 天",
+  "admin_chart_text": "文本分析",
+  "admin_chart_image": "识图分析",
+  "admin_chart_blocked": "429 拦截",
+  "admin_chart_visitors": "独立访客"
 }

@@ -275,5 +275,22 @@
   "admin_recent_payments": "Recent Payments",
   "admin_subscription_revenue": "Subscription Revenue",
   "admin_license_revenue": "License Revenue",
-  "admin_invoices": "Invoices"
+  "admin_invoices": "Invoices",
+  "admin_feature_flags": "Feature Flags",
+  "admin_vision_flag_title": "Vision AI for Regular Users",
+  "admin_vision_flag_desc": "When off, regular users get 403 from the vision API; admins stay exempt",
+  "admin_flag_enabled": "Enabled",
+  "admin_flag_disabled": "Disabled",
+  "admin_flag_on": "Turn on",
+  "admin_flag_off": "Turn off",
+  "admin_flag_updating": "Updating…",
+  "admin_flag_synced": "Synced to KV storage",
+  "admin_flag_failed": "Update failed, please retry",
+  "admin_traffic_trend": "Request Trend",
+  "admin_last_7_days": "Last 7 days",
+  "admin_last_30_days": "Last 30 days",
+  "admin_chart_text": "Text",
+  "admin_chart_image": "Vision",
+  "admin_chart_blocked": "429 Blocked",
+  "admin_chart_visitors": "Unique Visitors"
 }

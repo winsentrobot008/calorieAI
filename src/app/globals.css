@@ -771,3 +771,68 @@ body {
     height: 48px;
   }
 }
+
+/* ── Admin Feature Flag Toggle ── */
+.admin-flag-card {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: #0b0d14; border: 1px solid #1e293b; border-radius: 8px;
+  padding: 12px; margin-bottom: 8px;
+}
+.admin-flag-info { min-width: 0; }
+.admin-flag-title {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--text-bright); margin-bottom: 4px;
+}
+.admin-flag-desc { font-size: 11px; color: var(--text-dim); }
+.admin-flag-key { font-size: 10px; font-family: monospace; color: #475569; margin-top: 4px; }
+.admin-flag-hint { font-size: 11px; color: #34d399; margin-top: 6px; }
+.admin-toggle {
+  flex: 0 0 auto; min-width: 84px; padding: 6px 14px; border-radius: 8px;
+  border: 1px solid #475569; background: #1e293b; color: var(--text-muted);
+  font-size: 12px; cursor: pointer; transition: all .2s;
+}
+.admin-toggle:hover:not(:disabled) { border-color: #60a5fa; color: #60a5fa; }
+.admin-toggle.on { background: #34d39922; border-color: #34d399; color: #34d399; }
+.admin-toggle:disabled { opacity: .6; cursor: not-allowed; }
+
+/* ── Admin Traffic Analytics Chart ── */
+.admin-chart-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.admin-range { display: flex; gap: 6px; }
+.admin-range-btn {
+  padding: 4px 10px; border-radius: 8px; border: 1px solid #1e293b;
+  background: #0b0d14; color: var(--text-muted); font-size: 11px; cursor: pointer;
+}
+.admin-range-btn:hover { border-color: #475569; }
+.admin-range-btn.active { background: #f59e0b22; border-color: var(--accent-from); color: #fbbf24; }
+.admin-chart { width: 100%; }
+.admin-chart-empty { font-size: 12px; color: #64748b; padding: 20px 0; text-align: center; }
+.admin-chart-legend {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  font-size: 11px; color: var(--text-dim); margin-bottom: 10px;
+}
+.admin-chart-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; margin-left: 8px; }
+.admin-chart-swatch:first-child { margin-left: 0; }
+.admin-chart-swatch.text { background: #60a5fa; }
+.admin-chart-swatch.image { background: #a78bfa; }
+.admin-chart-swatch.blocked { background: #ef4444; }
+.admin-chart-bars {
+  display: flex; align-items: flex-end; gap: 4px; height: 140px;
+  border-bottom: 1px solid #1e293b; padding-bottom: 2px;
+}
+.admin-chart-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; }
+.admin-chart-stack {
+  position: relative; display: flex; flex-direction: column-reverse;
+  align-items: stretch; height: 100%;
+}
+.admin-chart-bar { width: 100%; min-height: 1px; }
+.admin-chart-bar.text { background: #60a5fa; }
+.admin-chart-bar.image { background: #a78bfa; }
+.admin-chart-bar.blocked { background: #ef4444; }
+.admin-chart-x { font-size: 9px; color: #475569; text-align: center; height: 12px; line-height: 12px; }
+.admin-chart-line-wrap { margin-top: 10px; }
+.admin-chart-line-title { font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
+.admin-chart-line { width: 100%; height: 48px; display: block; }
+.admin-chart-line polyline { fill: none; stroke: #34d399; stroke-width: 2; }

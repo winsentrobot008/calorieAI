@@ -23,6 +23,13 @@ import {
   resolveMealUserId,
 } from "@/lib/cost-control";
 import {
+  FEATURE_VISION_ENABLED,
+  VISION_DISABLED_CODE,
+  VISION_DISABLED_MESSAGE,
+  isFeatureEnabled,
+} from "@/lib/feature-flags";
+import { recordTrafficEvent } from "@/lib/traffic-analytics";
+import {
   currentTokenPolicy,
   enforceVisionImage,
   guardDeepSeekParams,
@@ -118,6 +125,7 @@ export async function POST(request: NextRequest) {
     // ── 单 IP 频次限制：防恶意并发消耗 API 额度 ──
     const rl = await rateLimitRequestDistributed(ip);
     if (!rl.allowed) {
+      await recordTrafficEvent("blocked", ip);
       await db.recordVisionLog({
         ip,
         provider: "waf",
@@ -135,6 +143,7 @@ export async function POST(request: NextRequest) {
     // ── Vision API 降本：单 IP 每日 30 次硬上限（滑动窗口 24h） ──
     const daily = await dailyRateLimitRequestDistributed(ip);
     if (!daily.allowed) {
+      await recordTrafficEvent("blocked", ip);
       await db.recordVisionLog({
         ip,
         provider: "waf",
@@ -173,6 +182,32 @@ export async function POST(request: NextRequest) {
     }
     const rawFile = formData.get("file");
     const mealType = formData.get("meal_type")?.toString() || "unknown";
+
+    userId = await resolveMealUserId(
+      String(formData.get("user_id") || request.headers.get("x-user-id") || ""),
+      ip
+    );
+
+    // ── 管理员判定：频控限额与积分预扣同时豁免（允许无限次调用） ──
+    const isAdmin = isAdminRequest(request, userId);
+
+    // ── 动态 Feature Flag（KV 实时开关）：普通用户识图闸门 ──
+    // 开关默认关闭：非管理员一律 403 阻断，提前于校验/计费/AI 调用，
+    // 保证关闭期间不消耗任何额度与模型成本；管理员账号始终豁免。
+    if (!isAdmin && !(await isFeatureEnabled(FEATURE_VISION_ENABLED))) {
+      await db.recordVisionLog({
+        ip,
+        provider: "waf",
+        label: "VISION",
+        status: 403,
+        latency_ms: Date.now() - startTime,
+        error: VISION_DISABLED_CODE,
+      });
+      return NextResponse.json(
+        { detail: VISION_DISABLED_MESSAGE, code: VISION_DISABLED_CODE },
+        { status: 403 }
+      );
+    }
 
     // 兼容 multipart File 与 data URI / 裸 Base64 字符串两种输入
     let base64 = "";
@@ -303,14 +338,6 @@ export async function POST(request: NextRequest) {
       mimeType = file.type;
     }
 
-    userId = await resolveMealUserId(
-      String(formData.get("user_id") || request.headers.get("x-user-id") || ""),
-      ip
-    );
-
-    // ── 管理员判定：频控限额与积分预扣同时豁免（允许无限次调用） ──
-    const isAdmin = isAdminRequest(request, userId);
-
     // ── 上线测试期每日频控：普通用户 3 次 / 24 小时，管理员不限（超限 429） ──
     const trial = await reserveTrialDailyLimit({
       userId,
@@ -319,6 +346,7 @@ export async function POST(request: NextRequest) {
       adminToken: request.headers.get("x-admin-token"),
     });
     if (!trial.allowed) {
+      await recordTrafficEvent("blocked", ip);
       await db.recordVisionLog({
         ip,
         provider: "waf",
@@ -333,6 +361,8 @@ export async function POST(request: NextRequest) {
       );
     }
     trialReserved = true;
+    // 每日请求分类统计：通过全部闸门的识图分析量（best-effort，绝不影响主流程）
+    await recordTrafficEvent("image", ip);
 
     let remainingCredits = 0;
     if (isAdmin) {
