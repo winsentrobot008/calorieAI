@@ -280,7 +280,7 @@ function MealRecorder({
   mealType: MealType;
   onMealTypeChange: (m: MealType) => void;
   onMealSaved?: () => void;
-  onSpendCredit: () => void;
+  onSpendCredit: (remainingCredits?: number) => void;
   onOpenBilling: () => void;
   onOpenLogin: () => void;
   onWatchAd: () => void;
@@ -482,7 +482,7 @@ function MealRecorder({
       // 免费次数 +1（第 3 次拍照前仍为免费）
       const used = incrementScanCount();
       addLog(`[SCAN] 免费次数已使用 ${used}/${FREE_SCAN_LIMIT}`);
-      // 日志面板直接打印命中模型名（例如 "Gemini (gemini-1.5-flash)"）
+      // 日志面板直接打印命中模型名（例如 "Gemini (gemini-2.5-flash)"）
       const modelLabel = data.model?.label || (data.model ? `${data.model.provider} (${data.model.model || "unknown"})` : "");
       if (modelLabel) addLog(`[AI] 识别模型: ${modelLabel}`);
       addLog(`[AI] 识别到 ${data.count} 种食物`);
@@ -490,9 +490,9 @@ function MealRecorder({
         addLog(`  ${rec.food} — ${rec.calories} kcal (P${rec.protein_g}/F${rec.fat_g}/C${rec.carbs_g})`);
       });
 
-      // 识别成功后自动扣除 1 积分（Pro 用户无限次，免扣）
+      // 识图积分已在服务端分析请求内原子扣除，此处仅用返回余额同步 UI（绝不二次扣分）
       if (!isPro) {
-        onSpendCredit();
+        onSpendCredit(data.remainingCredits);
         addLog("[Credits] 识别成功，扣除 1 积分");
       }
       showToast(t("recognition_success", { count: data.count ?? (data.records || []).length }));
@@ -513,7 +513,7 @@ function MealRecorder({
       const res = await fetch(`${API}/v1/meals/analyze-text`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text.trim(), meal_type: mealType }),
+        body: JSON.stringify({ text: text.trim(), meal_type: mealType, user_id: getUserId() }),
       });
 
       if (res.ok) {
@@ -535,9 +535,9 @@ function MealRecorder({
           addLog(`  ${rec.food} — ${rec.calories} kcal (P${rec.protein_g}/F${rec.fat_g}/C${rec.carbs_g})`);
         });
 
-        // 分析成功后自动扣除 1 积分（Pro 用户无限次，免扣）
+        // 文字分析积分同样由服务端扣除，仅同步返回余额（绝不二次扣分）
         if (!isPro) {
-          onSpendCredit();
+          onSpendCredit(data.remainingCredits);
           addLog("[Credits] 识别成功，扣除 1 积分");
         }
       } else {
@@ -1335,19 +1335,23 @@ export default function Home() {
     const next = addCredits(AD_REWARD_CREDITS);
     setCredits(next);
     setAdOpen(false);
-    // 服务端记录一次奖励（best-effort，失败不影响本地发奖）
-    fetch("/api/v1/billing/ad-reward", { method: "POST" }).catch(() => {});
-    // 同步服务器持久化积分（以服务器返回为准）
-    fetch("/api/v1/user/credits", {
+    // 服务端权威入账：/api/v1/billing/ad-reward 内部按 user_id 加积分并做每日限频，
+    // 客户端不再直接传 delta（避免任意刷分）
+    fetch("/api/v1/billing/ad-reward", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: getUserId(), delta: AD_REWARD_CREDITS, action: "ad" }),
+      body: JSON.stringify({ user_id: getUserId() }),
     })
       .then((r) => r.json())
       .then((d) => {
         if (d && typeof d.credits === "number") {
           writeCredits(d.credits);
           setCredits(d.credits);
+        } else if (d?.rewarded !== true) {
+          // 服务端未入账（如达到每日上限）：回滚本地乐观加值，避免展示虚假余额
+          const rolledBack = addCredits(-AD_REWARD_CREDITS);
+          writeCredits(rolledBack);
+          setCredits(rolledBack);
         }
         if (d && typeof d.is_pro === "boolean") {
           writeProFlag(d.is_pro);
@@ -1358,28 +1362,19 @@ export default function Home() {
     addLog(`[ADS] 广告播放完成，获得 +${AD_REWARD_CREDITS} 积分（余额 ${next}）`);
   }, [addLog]);
 
-  // 识图成功后扣除 1 积分
-  const handleSpendCredit = useCallback(() => {
-    const next = Math.max(0, readCredits() - 1);
+  /**
+   * 识图成功后同步积分 UI。
+   *
+   * 扣分已由服务端在 analyze-image / analyze-text 内原子完成（含失败退分），
+   * 这里只接收接口返回的 remainingCredits 覆盖本地缓存，绝不再向
+   * /api/v1/user/credits 发送 delta: -1，避免双重扣分。
+   * 老响应缺失该字段时退回本地 -1 展示，仅影响 UI，不产生服务端扣分。
+   */
+  const handleSpendCredit = useCallback((remainingCredits?: number) => {
+    const next =
+      typeof remainingCredits === "number" ? remainingCredits : Math.max(0, readCredits() - 1);
     writeCredits(next);
     setCredits(next);
-    fetch("/api/v1/user/credits", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: getUserId(), delta: -1, action: "recognition" }),
-    })
-      .then((r) => r.json())
-      .then((d) => {
-        if (d && typeof d.credits === "number") {
-          writeCredits(d.credits);
-          setCredits(d.credits);
-        }
-        if (d && typeof d.is_pro === "boolean") {
-          writeProFlag(d.is_pro);
-          setIsPro(d.is_pro);
-        }
-      })
-      .catch(() => {});
   }, []);
 
   // 支付完成：按积分包一次性入账（Credits Top-up，无订阅）

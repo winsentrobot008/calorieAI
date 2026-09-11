@@ -1,23 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getClientIp, checkAntiCrawler, rateLimitRequest } from "@/lib/anti-crawler";
+import {
+  getClientIp,
+  checkAntiCrawler,
+  dailyRateLimitRequestDistributed,
+  rateLimitRequestDistributed,
+} from "@/lib/anti-crawler";
 import { db } from "@/lib/db";
-import { createGatewayClient } from "@/lib/gateway-client";
 import { APP_CONFIG, normalizeGeminiModel } from "@/lib/app-config";
 import { findLocalFoodInText, getFoodCache, setFoodCache } from "@/lib/cache/foodCache";
-import { reserveMealCredit } from "@/lib/cost-control";
+import { refundMealCredit, reserveMealCredit, resolveMealUserId } from "@/lib/cost-control";
 
-// 中央网关接入（可选）：配置 GATEWAY_BASE_URL + GATEWAY_APP_KEY 时优先走统一文字分析端点；
-// 网关未配置或不可用时自动回退直连 Gemini，避免报错或返回空值。
-const gateway = createGatewayClient({
-  baseUrl: process.env.GATEWAY_BASE_URL || "",
-  appId: "calorieai",
-  appKey: process.env.GATEWAY_APP_KEY || "",
-});
+/** Gemini 调用超时（毫秒）：防止上游挂起长期占用 Serverless 实例 */
+const GEMINI_TIMEOUT_MS = 15_000;
 
 /**
  * POST /api/v1/meals/analyze-text
  *
  * 接收用户食物描述文本（如 “吃了200g米饭和100g西兰花”），调用 Google Gemini 估算营养数据。
+ *
+ * Prompt 契约：每项对象严格匹配
+ *   { food_name, estimated_calories, macronutrients{protein_g,fat_g,carbs_g}, confidence_score }
+ *   服务端归一化为前端 records 字段（food/calories/protein_g/fat_g/carbs_g/confidence）。
  *
  * 请求体: { text: string, meal_type?: string }
  * 响应:
@@ -26,7 +29,7 @@ const gateway = createGatewayClient({
  *     records: FoodRecord[],   // 兼容旧前端结构
  *     items: FoodRecord[],     // 与 records 同构的别名
  *     totalKcal, totalProtein, totalFat, totalCarbs: number,   // 汇总
- *     model: { provider, model, label, switched, attempts, gateway? }
+ *     model: { provider, model, label, switched, attempts }
  *   }
  *
  * 模型配置:
@@ -37,6 +40,8 @@ export async function POST(request: NextRequest) {
   const startTime = Date.now();
   const ip = getClientIp(request);
   const ua = request.headers.get("user-agent") || "";
+  let creditsReserved = false;
+  let userId = "";
 
   try {
     // ── WAF 反爬虫校验 ──
@@ -56,8 +61,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ── 单 IP 频次限制 ──
-    const rl = rateLimitRequest(ip);
+    // ── 单 IP 频次限制（Upstash 分布式优先，未配置时回退进程内） ──
+    const rl = await rateLimitRequestDistributed(ip);
     if (!rl.allowed) {
       await db.recordVisionLog({
         ip,
@@ -70,6 +75,30 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { detail: "请求过于频繁，请稍后再试", code: "RATE_LIMITED", retry_after: rl.retryAfterSeconds },
         { status: 429, headers: { "Retry-After": String(rl.retryAfterSeconds || 60) } }
+      );
+    }
+
+    // ── 单 IP 每日 30 次硬上限（与 analyze-image 对齐，防成本失控） ──
+    const daily = await dailyRateLimitRequestDistributed(ip);
+    if (!daily.allowed) {
+      await db.recordVisionLog({
+        ip,
+        provider: "api",
+        label: "TEXT",
+        status: 429,
+        latency_ms: Date.now() - startTime,
+        error: "DAILY_RATE_LIMITED",
+      });
+      return NextResponse.json(
+        {
+          detail: "今日分析次数已达上限（30 次/日），请明天再试",
+          code: "DAILY_RATE_LIMITED",
+          retry_after: daily.retryAfterSeconds,
+        },
+        {
+          status: 429,
+          headers: { "Retry-After": String(daily.retryAfterSeconds || 86400) },
+        }
       );
     }
 
@@ -91,11 +120,17 @@ export async function POST(request: NextRequest) {
     }
     console.log(`[Text] 收到分析请求: ip=${ip} meal_type=${mealType} text="${text.slice(0, 80)}..."`);
 
+    userId = await resolveMealUserId(
+      String(body?.user_id || request.headers.get("x-user-id") || ""),
+      ip
+    );
+
     const localFoodName = findLocalFoodInText(text);
     if (localFoodName && !/[和与,，、及&]/.test(text.replace(localFoodName, ""))) {
       const cached = await getFoodCache([localFoodName]);
       if (cached) {
         const record = cached[0];
+        // 本地缓存命中不扣积分：直接回传服务端真实余额，供前端同步
         return NextResponse.json({
           count: 1,
           records: [record],
@@ -104,12 +139,12 @@ export async function POST(request: NextRequest) {
           totalProtein: record.protein_g,
           totalFat: record.fat_g,
           totalCarbs: record.carbs_g,
+          remainingCredits: (await db.getCredits(userId)) ?? 0,
           model: { provider: "local", model: "static-food-db", label: "Local Food DB", switched: false, attempts: 0 },
         });
       }
     }
 
-    const userId = String(body?.user_id || request.headers.get("x-user-id") || "anonymous");
     const creditGuard = await reserveMealCredit(userId, ip);
     if (!creditGuard.allowed) {
       return NextResponse.json(
@@ -123,30 +158,13 @@ export async function POST(request: NextRequest) {
         }
       );
     }
-
-    // ── 中央网关优先：统一文字分析（失败自动回退直连）──
-    if (gateway.isConfigured()) {
-      try {
-        const gw = await gateway.text({ text, meal_type: mealType });
-        console.log(`[Text][Gateway] 网关分析成功: provider=${gw.model.provider} count=${gw.count}`);
-        await db.recordVisionLog({
-          ip,
-          provider: "text",
-          model: gw.model.model,
-          label: gw.model.label,
-          status: 200,
-          latency_ms: Date.now() - startTime,
-          count: gw.count,
-        });
-        return NextResponse.json({ ...gw, model: { ...gw.model, gateway: true } });
-      } catch (gwErr: any) {
-        console.warn("[Text][Gateway] 网关文字分析失败，回退直连:", gwErr.message);
-      }
-    }
+    creditsReserved = true;
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       console.warn("[Text] No API key configured (GEMINI_API_KEY)");
+      await refundMealCredit(userId);
+      creditsReserved = false;
       await db.recordVisionLog({
         ip,
         provider: "api",
@@ -182,9 +200,17 @@ export async function POST(request: NextRequest) {
       });
       const cacheNames = result.records.map((record) => String(record.food || "")).filter(Boolean);
       if (cacheNames.length) await setFoodCache(cacheNames, result.records);
-      return NextResponse.json(payload);
+      return NextResponse.json({ ...payload, remainingCredits: creditGuard.remaining });
     } catch (err: any) {
-      console.error("[Text] Gemini API failed:", err.message);
+      const isParseError = /无法解析/.test(err?.message || "");
+      if (creditsReserved) {
+        await refundMealCredit(userId);
+        creditsReserved = false;
+      }
+      console.error(
+        `[Text] Gemini API failed (${isParseError ? "PARSE_ERROR" : "PROVIDER_ERROR"}):`,
+        err?.message || err
+      );
       await db.recordVisionLog({
         ip,
         provider: "api",
@@ -195,14 +221,18 @@ export async function POST(request: NextRequest) {
       });
       return NextResponse.json(
         {
-          error: "Gemini API Error: " + (err?.message || "未知错误"),
-          detail: "Gemini API Error: " + (err?.message || "未知错误"),
-          code: "TEXT_PROVIDER_ERROR",
+          error: "AI 服务暂时不可用，请稍后再试",
+          detail: "AI 服务暂时不可用，请稍后再试",
+          code: "AI_SERVICE_UNAVAILABLE",
         },
         { status: 502 }
       );
     }
   } catch (error: any) {
+    if (creditsReserved) {
+      await refundMealCredit(userId);
+      creditsReserved = false;
+    }
     console.error("[Text Error]", error);
     await db.recordVisionLog({
       ip,
@@ -212,7 +242,14 @@ export async function POST(request: NextRequest) {
       latency_ms: Date.now() - startTime,
       error: (error?.message || "UNKNOWN").slice(0, 200),
     });
-    return NextResponse.json({ error: "文字分析失败: " + (error?.message || "未知错误"), detail: "文字分析失败: " + (error?.message || "未知错误"), code: "TEXT_ERROR" }, { status: 500 });
+    return NextResponse.json(
+      {
+        error: "AI 服务暂时不可用，请稍后再试",
+        detail: "AI 服务暂时不可用，请稍后再试",
+        code: "AI_SERVICE_UNAVAILABLE",
+      },
+      { status: 500 }
+    );
   }
 }
 
@@ -250,7 +287,7 @@ function buildTextPrompt(text: string, mealType: string): string {
   return APP_CONFIG.prompts.text(text, mealType);
 }
 
-/** Google Gemini（文本生成，默认低成本模型 gemini-1.5-flash，模型 ID 自动剥离 "models/" 前缀） */
+/** Google Gemini（文本生成，默认低成本模型 gemini-2.5-flash，模型 ID 自动剥离 "models/" 前缀） */
 async function analyzeTextWithGemini(
   text: string,
   mealType: string,
@@ -258,10 +295,14 @@ async function analyzeTextWithGemini(
 ): Promise<TextAnalysisResult> {
   const model = normalizeGeminiModel(process.env.GEMINI_MODEL || APP_CONFIG.models.text);
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
       body: JSON.stringify({
         contents: [{ parts: [{ text: buildTextPrompt(text, mealType) }] }],
         generationConfig: {
@@ -290,6 +331,14 @@ async function analyzeTextWithGemini(
 function parseFoodRecords(text: string): FoodRecord[] {
   const cleaned = text.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
 
+  const isFoodLike = (value: any): boolean =>
+    !!(
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      (value.food_name || value.food || value.name || value.estimated_calories || value.calories)
+    );
+
   const tryParse = (raw: string): any[] | null => {
     try {
       const parsed = JSON.parse(raw);
@@ -298,6 +347,8 @@ function parseFoodRecords(text: string): FoodRecord[] {
         for (const key of ["records", "items", "foods"]) {
           if (Array.isArray(parsed[key])) return parsed[key];
         }
+        // 单对象兜底：模型可能只返回一个食物对象（含 food_name / estimated_calories 等主契约字段）
+        if (isFoodLike(parsed)) return [parsed];
       }
       return null;
     } catch {
@@ -313,21 +364,28 @@ function parseFoodRecords(text: string): FoodRecord[] {
   const normalize = (items: any[]): FoodRecord[] =>
     items
       .filter((item) => item && typeof item === "object")
-      .map((raw) => ({
-        food: String(raw.food ?? raw.name ?? raw.food_name ?? raw.food_en ?? "未知"),
-        food_en: String(raw.food_en ?? raw.name_en ?? ""),
-        grams: toNum(raw.grams ?? raw.gram ?? raw.weight_g ?? raw.weight ?? raw.estimated_weight_g),
-        calories: toNum(raw.calories ?? raw.cal ?? raw.kcal ?? raw.calorie),
-        protein_g: toNum(raw.protein_g ?? raw.protein),
-        fat_g: toNum(raw.fat_g ?? raw.fat),
-        carbs_g: toNum(raw.carbs_g ?? raw.carbs ?? raw.carbohydrates_g ?? raw.carbohydrates),
-        confidence:
-          raw.confidence != null
-            ? toNum(raw.confidence)
-            : raw.confidence_score != null
-              ? toNum(raw.confidence_score)
-              : null,
-      }));
+      .map((raw) => {
+        // 主契约嵌套结构 macronutrients.{protein_g,fat_g,carbs_g}
+        const macros =
+          raw.macronutrients && typeof raw.macronutrients === "object" ? raw.macronutrients : {};
+        return {
+          food: String(raw.food ?? raw.name ?? raw.food_name ?? raw.food_en ?? "未知"),
+          food_en: String(raw.food_en ?? raw.name_en ?? ""),
+          grams: toNum(raw.grams ?? raw.gram ?? raw.weight_g ?? raw.weight ?? raw.estimated_weight_g),
+          calories: toNum(raw.estimated_calories ?? raw.calories ?? raw.cal ?? raw.kcal ?? raw.calorie),
+          protein_g: toNum(macros.protein_g ?? macros.protein ?? raw.protein_g ?? raw.protein),
+          fat_g: toNum(macros.fat_g ?? macros.fat ?? raw.fat_g ?? raw.fat),
+          carbs_g: toNum(
+            macros.carbs_g ?? macros.carbs ?? raw.carbs_g ?? raw.carbs ?? raw.carbohydrates_g ?? raw.carbohydrates
+          ),
+          confidence:
+            raw.confidence != null
+              ? toNum(raw.confidence)
+              : raw.confidence_score != null
+                ? toNum(raw.confidence_score)
+                : null,
+        };
+      });
 
   const direct = tryParse(cleaned);
   if (direct !== null) return normalize(direct);
