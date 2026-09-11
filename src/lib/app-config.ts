@@ -18,15 +18,27 @@ export const APP_CONFIG = {
   appNameZh: "卡路里助手",
 
   /**
-   * AI 模型默认值（DeepSeek 已移除，统一使用 Google Gemini 低成本模型）。
-   * 值必须是裸模型 ID（如 "gemini-2.5-flash"），严禁带 "models/" 前缀，
-   * 否则会拼出 /v1beta/models/models/gemini-2.5-flash 双路径导致 API 404。
+   * AI 主调 Provider：DeepSeek 官方 API（OpenAI 兼容 chat/completions）。
+   *   - 密钥：DEEPSEEK_API_KEY
+   *   - 端点：DEEPSEEK_BASE_URL（默认 https://api.deepseek.com，可含 /v1）
+   * 识图与文字分析统一走该端点；Gemini 仅作为识图的可选兜底。
+   */
+  ai: {
+    provider: "deepseek",
+    baseUrl: "https://api.deepseek.com",
+    /** OpenAI 兼容补全路径（base 已含 /v1 时拼接结果同样正确） */
+    chatPath: "/chat/completions",
+  },
+
+  /**
+   * AI 模型默认值（DeepSeek 主调）。
+   * 值必须是裸模型 ID（如 "deepseek-chat"），严禁带 provider 前缀。
    */
   models: {
-    /** 识图模型：gemini-2.5-flash（原生多模态，单次调用完成食物识别 + 营养 JSON） */
-    vision: "gemini-2.5-flash",
+    /** 识图模型：deepseek-chat（可用 DEEPSEEK_VISION_MODEL 覆盖为多模态模型） */
+    vision: "deepseek-chat",
     /** 文字分析模型 */
-    text: "gemini-2.5-flash",
+    text: "deepseek-chat",
   },
 
   /** 统一 AI Prompt 工厂（按应用切换，网关 PROMPTS 表与此保持一致） */
@@ -86,4 +98,52 @@ export function normalizeGeminiModel(raw: string): string {
     .replace(/^(?:v1beta\/)?(?:models\/)+/, "")
     .replace(/:generateContent$/, "");
   return cleaned || "gemini-2.5-flash";
+}
+
+/** DeepSeek 主调端点基址（DEEPSEEK_BASE_URL 覆盖，去掉尾部斜杠） */
+export function deepSeekBaseUrl(): string {
+  const base = (process.env.DEEPSEEK_BASE_URL || APP_CONFIG.ai.baseUrl).trim();
+  return base.replace(/\/+$/, "") || APP_CONFIG.ai.baseUrl;
+}
+
+/**
+ * DeepSeek OpenAI 兼容补全端点：`<base>/chat/completions`。
+ * base 形如 https://api.deepseek.com 或 https://api.deepseek.com/v1 均拼接正确；
+ * 若 DEEPSEEK_BASE_URL 已直接写到 /chat/completions 则原样返回。
+ */
+export function deepSeekChatEndpoint(): string {
+  const base = deepSeekBaseUrl();
+  if (/\/chat\/completions$/.test(base)) return base;
+  return `${base}${APP_CONFIG.ai.chatPath}`;
+}
+
+/** DeepSeek 密钥（DEEPSEEK_API_KEY）；未配置时返回空串，由路由返回明确错误 */
+export function deepSeekApiKey(): string {
+  return (process.env.DEEPSEEK_API_KEY || "").trim();
+}
+
+/**
+ * DeepSeek 模型 ID：DEEPSEEK_MODEL 覆盖文本模型，DEEPSEEK_VISION_MODEL 覆盖识图模型
+ * （识图仍回落到 DEEPSEEK_MODEL，再回落 APP_CONFIG.models）。
+ */
+export function resolveDeepSeekModel(kind: "vision" | "text" = "text"): string {
+  const configured =
+    kind === "vision"
+      ? process.env.DEEPSEEK_VISION_MODEL || process.env.DEEPSEEK_MODEL
+      : process.env.DEEPSEEK_MODEL;
+  const model = (configured || APP_CONFIG.models[kind]).trim();
+  return model || APP_CONFIG.models[kind];
+}
+
+/**
+ * 识图兜底密钥：DeepSeek 官方 API 暂无多模态识图能力，
+ * 配置 GEMINI_API_KEY 时可用 Gemini Vision 兜底（未配置则不兜底，返回明确错误）。
+ */
+export function visionFallbackApiKey(): string {
+  return (process.env.GEMINI_API_KEY || "").trim();
+}
+
+/** 识图兜底模型 ID（Gemini Vision，默认 gemini-2.5-flash） */
+export function resolveVisionFallbackModel(): string {
+  return normalizeGeminiModel(process.env.GEMINI_VISION_MODEL || process.env.GEMINI_MODEL || "");
 }

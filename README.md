@@ -47,7 +47,7 @@
 
 | 规范 | 要求 | 落地方式 |
 |------|------|---------|
-| **代码层面零 Key** | 敏感密钥（Stripe/PayPal、Gemini/OpenRouter、KV/Postgres）一律 `process.env.*` 读取，禁止硬编码 | 全部路由/适配器经 `process.env.X` 注入；`.env.example` 为唯一变量清单 |
+| **代码层面零 Key** | 敏感密钥（Stripe/PayPal、DeepSeek/Gemini、KV/Postgres）一律 `process.env.*` 读取，禁止硬编码 | 全部路由/适配器经 `process.env.X` 注入；`.env.example` 为唯一变量清单 |
 | **服务端权威** | 积分、Pro 权限、支付流水由服务端 DAL 判定，前端只消费 API 结果 | `POST /api/v1/user/credits`、`billing/status`、`recordPayment` 统一收口 |
 | **可移植部署** | 克隆后导入 Vercel 即可 1 分钟构建上线 | `vercel.json` 显式声明 framework / build / install；`next build` 内置路由门禁 |
 
@@ -71,7 +71,7 @@ rg -o "process\.env\.[A-Z_]+" src | sort -u
 |---|------|------------|
 | 1 | 复制模版 | `cp -r products/calorieai products/petai`（或 Clone 仓库后改目录名） |
 | 2 | 全局重命名 | 将 `calorieai → petai`、`CalorieAI → PetAI`、`app_id=calorieai → petai`（路由、i18n、品牌文案按需调整） |
-| 3 | 配置密钥 | `cp .env.example .env.local` 填入最小必填集：`GEMINI_API_KEY` + Stripe 双 Key；推荐加 `POSTGRES_URL`（见 §9.1） |
+| 3 | 配置密钥 | `cp .env.example .env.local` 填入最小必填集：`DEEPSEEK_API_KEY` + Stripe 双 Key；推荐加 `POSTGRES_URL`（见 §9.1） |
 | 4 | 本地门禁 | `npm install && npm run build`（prebuild 自动跑 `test:routes` + TypeScript） |
 | 5 | 一键上线 | Vercel → New Project → Import Git Repo；`vercel.json` 已声明 `framework: "nextjs"`，导入后 **Deploy 即可 1 分钟构建上线**；在 Dashboard 配置 Environment Variables |
 | 6 | 支付 Webhook | Stripe Dashboard 配置 Webhook → `https://你的域名/api/stripe/webhook`（事件清单见 §9.3） |
@@ -106,7 +106,7 @@ rg -o "process\.env\.[A-Z_]+" src | sort -u
 ```
 拍照 / 上传食物图片
    ↓
-A→B 视觉回退链识别 (Gemini → OpenRouter)
+DeepSeek 主调识图（失败时可选 Gemini Vision 兜底）
    ↓
 服务端鉴权: 免费额度? → 积分余额?   （服务端权威 · 1 积分/次）
    ↓
@@ -216,7 +216,7 @@ Stripe Checkout 真实收款，支持：
 | **状态与 i18n** | 自定义 `LocaleInit` + `hydrated` 状态延迟加载（防 React #418） |
 | **支付 (主)** | Stripe — 信用卡 / Apple Pay / Link / 支付宝 / 微信支付 |
 | **支付 (辅)** | PayPal SDK (`@paypal/react-paypal-js`) — 微额支付兜底 |
-| **AI 视觉** | A→B 回退链：Google Gemini Vision → OpenRouter |
+| **AI 模型** | DeepSeek 主调（`deepseek-chat`，OpenAI 兼容 chat/completions）；识图失败时可选 Gemini Vision 兜底 |
 | **TTS 语音** | Edge-TTS (Azure Cognitive Services) |
 | **持久化 (DAL)** | Postgres / Vercel KV (Redis) / 本地文件 三机制自动降级 |
 | **中央网关** | [`projects/central-gateway`](../../projects/central-gateway/README.md) SDK 接入示例（`src/lib/gateway-client.ts`） |
@@ -291,10 +291,12 @@ npm run dev
 | 4 | `NEXT_PUBLIC_PAYPAL_CLIENT_ID` | 可选 | PayPal Client ID（辅渠道） |
 | 5 | `PAYPAL_CLIENT_SECRET` | 可选 | PayPal 服务端密钥 |
 | 6 | `PAYPAL_API_URL` | 可选 | PayPal API 地址（Sandbox/Live） |
-| 7 | `GEMINI_API_KEY` | 推荐 | Gemini Vision 密钥（A 提供商） |
-| 8 | `GEMINI_MODEL` | 可选 | Gemini 模型（默认 `gemini-2.5-flash` 低成本视觉模型） |
-| 9 | `OPENROUTER_API_KEY` | 可选 | OpenRouter 密钥（B 提供商） |
-| 10 | `OPENROUTER_MODEL` | 可选 | OpenRouter 模型（默认 `openai/gpt-4o-mini`） |
+| 7 | `DEEPSEEK_API_KEY` | ✅ | DeepSeek 主调密钥（识图 + 文字分析，OpenAI 兼容） |
+| 8 | `DEEPSEEK_BASE_URL` | 可选 | DeepSeek 端点（默认 `https://api.deepseek.com`，可含 `/v1`） |
+| 9 | `DEEPSEEK_MODEL` | 可选 | DeepSeek 模型（默认 `deepseek-chat`） |
+| 10 | `DEEPSEEK_VISION_MODEL` | 可选 | 识图模型覆盖（默认同 `DEEPSEEK_MODEL`） |
+| 10.1 | `GEMINI_API_KEY` / `GEMINI_VISION_MODEL` | 可选 | 识图兜底：DeepSeek 不接受图片输入时走 Gemini Vision |
+| 10.2 | `ADMIN_API_TOKEN` | 可选 | 测试期频控豁免的静态管理员令牌（`x-admin-token`） |
 | 11 | `POSTGRES_URL` / `DATABASE_URL` | 推荐 | Postgres 连接串（Vercel Postgres / Neon / Supabase） |
 | 12 | `POSTGRES_SSL` | 可选 | Postgres SSL 开关（默认开启） |
 | 13 | `KV_REST_API_URL` / `VERCEL_KV_REST_API_URL` / `UPSTASH_REDIS_REST_URL` | 可选 | KV REST 地址 |
@@ -368,10 +370,10 @@ node scripts/test-stripe-e2e.mjs       # 支付全链路 E2E
 | 降本措施 | 规范 | 落地位置 |
 |----------|------|---------|
 | **前端 Canvas 压缩** | 最长边 ≤ **768px**、JPEG **quality 0.7**、体积 ≤ **200KB**；逐级降质/降边长兜底，超限报 `STILL_TOO_LARGE` | [`src/lib/image-utils.ts`](src/lib/image-utils.ts)（`handleAnalyze` 上传前调用） |
-| **低成本模型路由** | 默认视觉模型 **`gemini-2.5-flash`**（`GEMINI_MODEL` 可覆盖）；OpenRouter 兜底 `openai/gpt-4o-mini` | [`src/app/api/v1/meals/analyze-image/route.ts`](src/app/api/v1/meals/analyze-image/route.ts) |
-| **请求参数收紧** | OpenAI 兼容接口 `max_tokens: 100` + `image_url.detail: "low"`；Gemini 原生接口不传长输出 | 同上 |
+| **低成本模型路由** | 主调 **`deepseek-chat`**（`DEEPSEEK_MODEL` / `DEEPSEEK_VISION_MODEL` 可覆盖）；识图失败时可选 Gemini Vision 兜底 | [`src/app/api/v1/meals/analyze-image/route.ts`](src/app/api/v1/meals/analyze-image/route.ts) |
+| **请求参数收紧** | token 守卫强制 `max_tokens: 1000` + `temperature: 0.2` + `image_url.detail: "low"`（`guardDeepSeekParams`，本地模型豁免） | [`src/lib/model-guard.ts`](src/lib/model-guard.ts) |
 | **极简 JSON 约束** | System Prompt 禁止 Markdown/解释文字，仅允许返回 `{"items":[{"name":"string","cal":0,"gram":0}],"total_cal":0}` | [`src/lib/app-config.ts`](src/lib/app-config.ts) `prompts.image` |
-| **每日频控** | 单 IP **30 次/日**（滑动窗口 24h）+ 每分钟 6 次双闸门；超限返回 `DAILY_RATE_LIMITED` / `RATE_LIMITED` | [`src/lib/anti-crawler.ts`](src/lib/anti-crawler.ts) + analyze-image 路由 |
+| **每日频控** | 单 IP **30 次/日**（滑动窗口 24h）+ 每分钟 6 次双闸门；**叠加测试期限额：普通用户 3 次/24h（429 + `TRIAL_DAILY_LIMIT`），管理员不限**；超限返回 `DAILY_RATE_LIMITED` / `RATE_LIMITED` | [`src/lib/anti-crawler.ts`](src/lib/anti-crawler.ts) + [`src/lib/trial-quota.ts`](src/lib/trial-quota.ts) + [`src/lib/cost-control.ts`](src/lib/cost-control.ts) |
 | **服务端体积兜底** | 后端拒绝 >200KB 的图片（`IMAGE_TOO_LARGE`），防绕过客户端压缩 | analyze-image 路由 |
 
 > ⚠️ 网关路径（配置 `GATEWAY_BASE_URL` 后识图优先走 Central Gateway）：请求参数与 Prompt 由网关侧控制，本仓库 `app-config.ts` 的 Prompt 需与网关 PROMPTS 表保持同步；客户端压缩与每日频控在本仓库路由层仍然生效。
@@ -401,6 +403,8 @@ npm run build            # 生产构建（prebuild 自动跑 test:routes + TypeS
 
 # ── 单元 / 冒烟 ──
 npm run test:api         # 动态 API 冒烟 + 语义探针（analyze-text 随机输入 ×2 + analyze-image ×1，反 Mock 断言）
+npm run test:trial-limit # 测试期频控门禁（本地 DeepSeek 桩：普通用户 3 次/24h + 429 文案 + 管理员豁免）
+npm run test:token-guard # token 守卫门禁（DeepSeek 等云端端点强制 max_tokens=1000 + temperature=0.2）
 npm test                 # = test:routes + test:api（含语义探针）
 
 # ── 语义级 QA 规范（禁止仅断言 200 OK）──

@@ -6,23 +6,30 @@ import {
   rateLimitRequestDistributed,
 } from "@/lib/anti-crawler";
 import { db } from "@/lib/db";
-import { APP_CONFIG, normalizeGeminiModel } from "@/lib/app-config";
+import { isAdminRequest } from "@/lib/admin-access";
+import { APP_CONFIG, deepSeekApiKey, deepSeekChatEndpoint, resolveDeepSeekModel } from "@/lib/app-config";
 import { findLocalFoodInText, getFoodCache, setFoodCache } from "@/lib/cache/foodCache";
-import { refundMealCredit, reserveMealCredit, resolveMealUserId } from "@/lib/cost-control";
+import {
+  refundMealCredit,
+  releaseTrialDailyLimit,
+  reserveMealCredit,
+  reserveTrialDailyLimit,
+  resolveMealUserId,
+} from "@/lib/cost-control";
 import {
   currentTokenPolicy,
-  guardGeminiConfig,
+  guardDeepSeekParams,
   guardSystemPrompt,
   logTokenGuard,
 } from "@/lib/model-guard";
 
-/** Gemini 调用超时（毫秒）：防止上游挂起长期占用 Serverless 实例 */
-const GEMINI_TIMEOUT_MS = 15_000;
+/** DeepSeek 调用超时（毫秒）：防止上游挂起长期占用 Serverless 实例 */
+const DEEPSEEK_TIMEOUT_MS = 15_000;
 
 /**
  * POST /api/v1/meals/analyze-text
  *
- * 接收用户食物描述文本（如 “吃了200g米饭和100g西兰花”），调用 Google Gemini 估算营养数据。
+ * 接收用户食物描述文本（如 “吃了200g米饭和100g西兰花”），调用 DeepSeek 估算营养数据。
  *
  * Prompt 契约：每项对象严格匹配
  *   { food_name, estimated_calories, macronutrients{protein_g,fat_g,carbs_g}, confidence_score }
@@ -39,7 +46,12 @@ const GEMINI_TIMEOUT_MS = 15_000;
  *   }
  *
  * 模型配置:
- *   - GEMINI_API_KEY      → Google Gemini（文本生成）
+ *   - DEEPSEEK_API_KEY    → DeepSeek（OpenAI 兼容 chat/completions，主调）
+ *   - DEEPSEEK_BASE_URL   → 端点覆盖（默认 https://api.deepseek.com）
+ *   - DEEPSEEK_MODEL      → 模型覆盖（默认 deepseek-chat）
+ *
+ * 上线测试期频控：普通用户 24 小时内最多 3 次（429 + 提示文案）；
+ * 管理员（管理员 user_id / 有效 x-admin-token）不限次数。
  * 如果未配置或调用失败，返回可诊断错误，绝不回退固定 Mock 数据。
  */
 export async function POST(request: NextRequest) {
@@ -47,6 +59,7 @@ export async function POST(request: NextRequest) {
   const ip = getClientIp(request);
   const ua = request.headers.get("user-agent") || "";
   let creditsReserved = false;
+  let trialReserved = false;
   let userId = "";
 
   try {
@@ -151,26 +164,69 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const creditGuard = await reserveMealCredit(userId, ip);
-    if (!creditGuard.allowed) {
+    // ── 管理员判定：频控限额与积分预扣同时豁免（允许无限次调用） ──
+    const isAdmin = isAdminRequest(request, userId);
+
+    // ── 上线测试期每日频控：普通用户 3 次 / 24 小时，管理员不限（超限 429） ──
+    const trial = await reserveTrialDailyLimit({
+      userId,
+      ip,
+      isAdmin,
+      adminToken: request.headers.get("x-admin-token"),
+    });
+    if (!trial.allowed) {
+      await db.recordVisionLog({
+        ip,
+        provider: "waf",
+        label: "TEXT",
+        status: 429,
+        latency_ms: Date.now() - startTime,
+        error: "TRIAL_DAILY_LIMIT",
+      });
       return NextResponse.json(
-        {
-          detail: creditGuard.status === 402 ? "积分不足，请先充值" : "请求过于频繁，请稍后再试",
-          code: creditGuard.code,
-        },
-        {
-          status: creditGuard.status,
-          headers: creditGuard.retryAfter ? { "Retry-After": String(creditGuard.retryAfter) } : undefined,
-        }
+        { detail: trial.detail, code: trial.code, retry_after: trial.retryAfter },
+        { status: 429, headers: { "Retry-After": String(trial.retryAfter || 86400) } }
       );
     }
-    creditsReserved = true;
+    trialReserved = true;
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    let remainingCredits = 0;
+    if (isAdmin) {
+      // 管理员：跳过积分预扣（与频控豁免一致），返回真实余额供前端同步
+      remainingCredits = (await db.getCredits(userId)) ?? 0;
+    } else {
+      const creditGuard = await reserveMealCredit(userId, ip);
+      if (!creditGuard.allowed) {
+        if (trialReserved) {
+          await releaseTrialDailyLimit(userId, ip);
+          trialReserved = false;
+        }
+        return NextResponse.json(
+          {
+            detail: creditGuard.status === 402 ? "积分不足，请先充值" : "请求过于频繁，请稍后再试",
+            code: creditGuard.code,
+          },
+          {
+            status: creditGuard.status,
+            headers: creditGuard.retryAfter ? { "Retry-After": String(creditGuard.retryAfter) } : undefined,
+          }
+        );
+      }
+      creditsReserved = true;
+      remainingCredits = creditGuard.remaining ?? 0;
+    }
+
+    const apiKey = deepSeekApiKey();
     if (!apiKey) {
-      console.warn("[Text] No API key configured (GEMINI_API_KEY)");
-      await refundMealCredit(userId);
-      creditsReserved = false;
+      console.warn("[Text] No API key configured (DEEPSEEK_API_KEY)");
+      if (creditsReserved) {
+        await refundMealCredit(userId);
+        creditsReserved = false;
+      }
+      if (trialReserved) {
+        await releaseTrialDailyLimit(userId, ip);
+        trialReserved = false;
+      }
       await db.recordVisionLog({
         ip,
         provider: "api",
@@ -181,8 +237,8 @@ export async function POST(request: NextRequest) {
       });
       return NextResponse.json(
         {
-          error: "未配置 AI 文本密钥（GEMINI_API_KEY），无法分析",
-          detail: "未配置 AI 文本密钥（GEMINI_API_KEY），无法分析",
+          error: "未配置 AI 文本密钥（DEEPSEEK_API_KEY），无法分析",
+          detail: "未配置 AI 文本密钥（DEEPSEEK_API_KEY），无法分析",
           code: "NO_TEXT_KEY",
         },
         { status: 503 }
@@ -190,7 +246,7 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-      const result = await analyzeTextWithGemini(text, mealType, apiKey);
+      const result = await analyzeTextWithDeepSeek(text, mealType, apiKey);
       const payload = buildPayload(result, 1);
       console.log(
         `[Text] 分析成功，命中提供商: ${result.model.label}（count=${result.count}）`
@@ -206,15 +262,19 @@ export async function POST(request: NextRequest) {
       });
       const cacheNames = result.records.map((record) => String(record.food || "")).filter(Boolean);
       if (cacheNames.length) await setFoodCache(cacheNames, result.records);
-      return NextResponse.json({ ...payload, remainingCredits: creditGuard.remaining });
+      return NextResponse.json({ ...payload, remainingCredits });
     } catch (err: any) {
       const isParseError = /无法解析/.test(err?.message || "");
       if (creditsReserved) {
         await refundMealCredit(userId);
         creditsReserved = false;
       }
+      if (trialReserved) {
+        await releaseTrialDailyLimit(userId, ip);
+        trialReserved = false;
+      }
       console.error(
-        `[Text] Gemini API failed (${isParseError ? "PARSE_ERROR" : "PROVIDER_ERROR"}):`,
+        `[Text] DeepSeek API failed (${isParseError ? "PARSE_ERROR" : "PROVIDER_ERROR"}):`,
         err?.message || err
       );
       await db.recordVisionLog({
@@ -239,6 +299,10 @@ export async function POST(request: NextRequest) {
       await refundMealCredit(userId);
       creditsReserved = false;
     }
+    if (trialReserved) {
+      await releaseTrialDailyLimit(userId, ip);
+      trialReserved = false;
+    }
     console.error("[Text Error]", error);
     await db.recordVisionLog({
       ip,
@@ -261,7 +325,7 @@ export async function POST(request: NextRequest) {
 
 // ─── 提供商封装（与 analyze-image 同构，文本版） ──────────────────────
 
-type TextProviderName = "gemini";
+type TextProviderName = "deepseek";
 
 interface TextAnalysisResult {
   count: number;
@@ -281,7 +345,7 @@ interface FoodRecord {
 }
 
 const PROVIDER_DISPLAY: Record<TextProviderName, string> = {
-  gemini: "Gemini",
+  deepseek: "DeepSeek",
 };
 
 function buildModelLabel(provider: TextProviderName, model: string): string {
@@ -293,14 +357,17 @@ function buildTextPrompt(text: string, mealType: string): string {
   return APP_CONFIG.prompts.text(text, mealType);
 }
 
-/** Google Gemini（文本生成，默认低成本模型 gemini-2.5-flash，模型 ID 自动剥离 "models/" 前缀） */
-async function analyzeTextWithGemini(
+/**
+ * DeepSeek 主调（OpenAI 兼容 chat/completions）：模型默认 APP_CONFIG.models.text
+ * （deepseek-chat），可用 DEEPSEEK_MODEL 覆盖；端点由 DEEPSEEK_BASE_URL 决定。
+ */
+async function analyzeTextWithDeepSeek(
   text: string,
   mealType: string,
   apiKey: string
 ): Promise<TextAnalysisResult> {
-  const model = normalizeGeminiModel(process.env.GEMINI_MODEL || APP_CONFIG.models.text);
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  const model = resolveDeepSeekModel("text");
+  const endpoint = deepSeekChatEndpoint();
 
   // ── 付费 API 自动节省 Token 模式（本地模型自动豁免、全量放开） ──
   // 云端付费：max_tokens=1000 / temperature=0.2 / System Prompt 追加极简强约束；
@@ -313,28 +380,34 @@ async function analyzeTextWithGemini(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-goog-api-key": apiKey,
+      Authorization: `Bearer ${apiKey}`,
     },
-    signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: buildTextPrompt(text, mealType) }] }],
-      ...(systemInstruction
-        ? { systemInstruction: { parts: [{ text: systemInstruction }] } }
-        : {}),
-      generationConfig: guardGeminiConfig({ responseMimeType: "application/json" }, policy),
-    }),
+    signal: AbortSignal.timeout(DEEPSEEK_TIMEOUT_MS),
+    body: JSON.stringify(
+      guardDeepSeekParams(
+        {
+          model,
+          stream: false,
+          messages: [
+            ...(systemInstruction ? [{ role: "system", content: systemInstruction }] : []),
+            { role: "user", content: buildTextPrompt(text, mealType) },
+          ],
+        },
+        policy
+      )
+    ),
   });
   if (!response.ok) {
     const errText = await response.text();
-    throw new Error(`Gemini API ${response.status}: ${errText.slice(0, 200)}`);
+    throw new Error(`DeepSeek API ${response.status}: ${errText.slice(0, 200)}`);
   }
   const data = await response.json();
-  const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || "[]";
+  const raw = data?.choices?.[0]?.message?.content || "[]";
   const records = parseFoodRecords(raw);
   return {
     count: records.length,
     records,
-    model: { provider: "gemini", model, label: buildModelLabel("gemini", model), switched: false },
+    model: { provider: "deepseek", model, label: buildModelLabel("deepseek", model), switched: false },
   };
 }
 

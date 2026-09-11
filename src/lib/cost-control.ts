@@ -15,8 +15,10 @@ import {
   type MealGuardResult,
 } from "@commercial-engine/middleware/credit-guard";
 import type { DistributedRateLimiter } from "@commercial-engine/middleware/rate-limit";
+import { isAdminToken, isAdminUserId } from "@/lib/admin-access";
 import { createDistributedLimiter } from "@/lib/anti-crawler";
 import { db, initCreditsIfMissing } from "@/lib/db";
+import { consumeTrialQuota, releaseTrialQuota } from "@/lib/trial-quota";
 import { anonymousUserId, isServerIssuedUserId } from "@/lib/user-identity";
 
 /** 积分守卫限频参数（与 credit-guard 默认值保持一致） */
@@ -91,5 +93,93 @@ export async function refundMealCredit(userId: string, amount = 1): Promise<void
     await refundMealCreditAtomic(userId, amount);
   } catch (err: unknown) {
     console.error("[Credits] 退分失败:", err instanceof Error ? err.message : err);
+  }
+}
+
+// ─── 上线测试期每日频控：普通用户 3 次 / 24h，管理员不限 ─────────────────────
+
+/** 测试期普通用户每日（24 小时滑动窗口）请求上限 */
+export const TRIAL_DAILY_LIMIT = 3;
+/** 超限错误码（HTTP 429） */
+export const TRIAL_LIMIT_CODE = "TRIAL_DAILY_LIMIT";
+/** 超限提示文案（按要求逐字返回） */
+export const TRIAL_LIMIT_MESSAGE = "测试阶段普通用户每天限额 3 次，如需更多额度请联系管理员";
+
+export interface TrialLimitInput {
+  /** 服务端裁定的调用方身份（登录账号 user_<hash>；匿名回落为 IP 派生的 anon_<hash>） */
+  userId: string;
+  /** 客户端真实 IP（userId 缺失时的兜底判重维度） */
+  ip: string;
+  /** 路由已判定为管理员（x-admin-token / 管理员 user_id） */
+  isAdmin?: boolean;
+  /** 管理员令牌（可选，服务端二次校验，防止绕过） */
+  adminToken?: string | null;
+}
+
+export interface TrialLimitResult {
+  allowed: boolean;
+  /** true = 管理员豁免，未计数、无上限 */
+  unlimited: boolean;
+  limit: number;
+  used: number;
+  /** 剩余次数；管理员豁免时为 null（无上限） */
+  remaining: number | null;
+  retryAfter?: number;
+  status?: 429;
+  code?: string;
+  detail?: string;
+}
+
+/**
+ * 判重 key：优先 User ID（登录账号 / 匿名 IP 派生 ID），
+ * 缺失时回落到真实 IP，保证「User ID / IP / Session」三维判重不失效。
+ */
+function trialQuotaKey(userId: string, ip: string): string {
+  const id = (userId || "").trim();
+  if (id) return `user:${id}`;
+  return `ip:${(ip || "").trim() || "unknown"}`;
+}
+
+/**
+ * 测试期每日限额校验（消费 1 次额度）：
+ *   - 管理员（管理员 user_id / 有效 x-admin-token / 静态 ADMIN_API_TOKEN）
+ *     → 直接放行，不计数、不限次；
+ *   - 普通用户 → 24 小时内最多 TRIAL_DAILY_LIMIT 次，超限返回 429 + 指定文案。
+ */
+export async function reserveTrialDailyLimit(input: TrialLimitInput): Promise<TrialLimitResult> {
+  const admin = input.isAdmin === true || isAdminUserId(input.userId) || isAdminToken(input.adminToken);
+  if (admin) {
+    return { allowed: true, unlimited: true, limit: TRIAL_DAILY_LIMIT, used: 0, remaining: null };
+  }
+
+  const check = await consumeTrialQuota(trialQuotaKey(input.userId, input.ip), TRIAL_DAILY_LIMIT);
+  if (!check.allowed) {
+    return {
+      allowed: false,
+      unlimited: false,
+      limit: TRIAL_DAILY_LIMIT,
+      used: check.used,
+      remaining: 0,
+      retryAfter: check.retryAfterSeconds,
+      status: 429,
+      code: TRIAL_LIMIT_CODE,
+      detail: TRIAL_LIMIT_MESSAGE,
+    };
+  }
+  return {
+    allowed: true,
+    unlimited: false,
+    limit: TRIAL_DAILY_LIMIT,
+    used: check.used,
+    remaining: check.remaining,
+  };
+}
+
+/** 退还 1 次测试期额度（AI 调用失败补偿，best-effort，绝不影响接口返回） */
+export async function releaseTrialDailyLimit(userId: string, ip: string): Promise<void> {
+  try {
+    await releaseTrialQuota(trialQuotaKey(userId, ip));
+  } catch (err: unknown) {
+    console.error("[TrialLimit] 退次数失败:", err instanceof Error ? err.message : err);
   }
 }

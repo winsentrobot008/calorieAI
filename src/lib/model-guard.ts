@@ -11,12 +11,15 @@
  *   1. 读取本应用的 LLM_PROVIDER / BASE_URL 环境判定调用目标；
  *   2. 用 sharp 实现「发送前把图片最长边压到 1024px 以内」的降分辨率端口；
  *   3. 打印控制台日志，便于线上确认压缩策略已生效。
+ *
+ * 主调目标：DeepSeek（https://api.deepseek.com，OpenAI 兼容 chat/completions）。
  */
 
 import {
   appendConciseSystemPrompt,
   describePolicy,
   enforceGeminiConfig,
+  enforceOpenAiParams,
   resolveTokenPolicy,
   visionEnforcement,
   type TokenPolicy,
@@ -28,10 +31,14 @@ const VISION_JPEG_QUALITY = 72;
 /**
  * 解析当前请求应使用的策略：
  *   - LLM_PROVIDER 优先（如 "ollama" 直接本地豁免）；
- *   - 否则以 BASE_URL / 实际调用端点判定（本仓库默认 Gemini 云端付费）。
+ *   - 否则以 BASE_URL / 实际调用端点判定（本仓库默认 DeepSeek 云端付费）。
+ *
+ * DeepSeek 端点（api.deepseek.com）由共享引擎按域名识别为付费 Provider，
+ * 自动注入省钱规则：max_tokens=1000、temperature=0.2、Vision detail=low、
+ * 分辨率 ≤1024px 与极简 System Prompt。
  */
 export function currentTokenPolicy(endpoint?: string): TokenPolicy {
-  const provider = process.env.LLM_PROVIDER || "gemini";
+  const provider = process.env.LLM_PROVIDER || "deepseek";
   const baseUrl = process.env.BASE_URL || endpoint || null;
   return resolveTokenPolicy({ provider, baseUrl });
 }
@@ -114,6 +121,18 @@ export function guardGeminiConfig(
   options: { vision?: boolean } = {}
 ): Record<string, unknown> {
   return enforceGeminiConfig({ ...base }, policy, options);
+}
+
+/**
+ * DeepSeek（OpenAI 兼容 chat/completions）省钱参数强制注入：
+ *   - 云端付费 → max_tokens=1000、temperature=0.2（覆盖调用方传入值）；
+ *   - 本地豁免 → 原样返回，不注入任何上限。
+ */
+export function guardDeepSeekParams(
+  base: Record<string, unknown>,
+  policy: TokenPolicy
+): Record<string, unknown> {
+  return enforceOpenAiParams({ ...base }, policy);
 }
 
 /**

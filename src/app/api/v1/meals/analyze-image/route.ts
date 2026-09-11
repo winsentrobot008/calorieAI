@@ -6,41 +6,59 @@ import {
   rateLimitRequestDistributed,
 } from "@/lib/anti-crawler";
 import { db } from "@/lib/db";
-import { APP_CONFIG, normalizeGeminiModel } from "@/lib/app-config";
-import { refundMealCredit, reserveMealCredit, resolveMealUserId } from "@/lib/cost-control";
+import { isAdminRequest } from "@/lib/admin-access";
+import {
+  APP_CONFIG,
+  deepSeekApiKey,
+  deepSeekChatEndpoint,
+  resolveDeepSeekModel,
+  resolveVisionFallbackModel,
+  visionFallbackApiKey,
+} from "@/lib/app-config";
+import {
+  refundMealCredit,
+  releaseTrialDailyLimit,
+  reserveMealCredit,
+  reserveTrialDailyLimit,
+  resolveMealUserId,
+} from "@/lib/cost-control";
 import {
   currentTokenPolicy,
   enforceVisionImage,
+  guardDeepSeekParams,
   guardGeminiConfig,
   guardSystemPrompt,
   logTokenGuard,
 } from "@/lib/model-guard";
 
 // 图片体积上限：4MB 为请求体硬上限（在 Vercel 4.5MB Body Limit 前先拦截）；
-// ≤200KB 为 Gemini inline 数据降本上限（客户端 Canvas 压缩后通常 ~50-150KB）。
+// ≤200KB 为 AI inline 数据降本上限（客户端 Canvas 压缩后通常 ~50-150KB）。
 const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 const MAX_INLINE_BYTES = 200 * 1024;
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
-/** Gemini 调用超时（毫秒）：防止上游挂起长期占用 Serverless 实例 */
-const GEMINI_TIMEOUT_MS = 15_000;
+/** AI 调用超时（毫秒）：防止上游挂起长期占用 Serverless 实例 */
+const AI_TIMEOUT_MS = 15_000;
 
 /**
  * POST /api/v1/meals/analyze-image
  *
- * 接收上传的食物图片，将其 Base64 编码后发送给 Google Gemini Vision 模型识别。
+ * 接收上传的食物图片，将其 Base64 编码后发送给 DeepSeek 模型识别
+ * （DeepSeek 不接受图片输入时，配置了 GEMINI_API_KEY 则回退 Gemini Vision）。
  * 输入兼容两种形式：
  *   - multipart/form-data：`file` 为图片 File（前端已 Canvas 压缩 ≤200KB）；
  *   - `file` 字段直接传 data URI（`data:image/jpeg;base64,`）或裸 Base64 字符串，
- *     服务端自动剥离 data URI 前缀后再发送给 Gemini。
+ *     服务端自动剥离 data URI 前缀后再发送给模型。
  *
  * 模型配置:
- *   - GEMINI_API_KEY    → Google Gemini Vision
- *   - GEMINI_MODEL      （默认取 APP_CONFIG.models.vision = gemini-2.5-flash，低成本视觉模型；
- *                         会自动剥离误配的 "models/" 前缀，模型 ID 必须是裸名称）
+ *   - DEEPSEEK_API_KEY        → DeepSeek 主调（OpenAI 兼容 chat/completions）
+ *   - DEEPSEEK_BASE_URL       （默认 https://api.deepseek.com，可含 /v1）
+ *   - DEEPSEEK_VISION_MODEL   （默认 APP_CONFIG.models.vision = deepseek-chat）
+ *   - GEMINI_API_KEY          （可选兜底：DeepSeek 识图失败时走 Gemini Vision）
  *
  * Vision API 降本规范（v1）：
- *   - Gemini 原生接口 generationConfig.maxOutputTokens=200 + responseMimeType=application/json；
+ *   - 付费云端统一 max_tokens=1000 / temperature=0.2（token 守卫自动注入）；
  *   - 单 IP 每日 ≤ 30 次 + 每分钟 ≤ 6 次双闸门（Upstash 分布式优先，未配置时回退进程内）。
+ *   - 上线测试期再叠加：普通用户每 24 小时 ≤ 3 次（429），管理员不限。
  *
  * Prompt 契约：每项对象严格匹配
  *   { food_name, estimated_calories, macronutrients{protein_g,fat_g,carbs_g}, confidence_score }
@@ -60,9 +78,9 @@ const GEMINI_TIMEOUT_MS = 15_000;
  *       confidence: number | null
  *     }>,
  *     model: {
- *       provider: string,   // 命中提供商: gemini
- *       model: string,      // 实际使用的模型 ID（如 gemini-2.5-flash）
- *       label: string,      // 展示名（如 "Gemini (gemini-2.5-flash)"）
+ *       provider: string,   // 命中提供商: deepseek | gemini
+ *       model: string,      // 实际使用的模型 ID（如 deepseek-chat）
+ *       label: string,      // 展示名（如 "DeepSeek (deepseek-chat)"）
  *       switched: boolean,  // false
  *       attempts: number    // 1
  *     }
@@ -76,6 +94,7 @@ export async function POST(request: NextRequest) {
   const ip = getClientIp(request);
   const ua = request.headers.get("user-agent") || "";
   let creditsReserved = false;
+  let trialReserved = false;
   let userId = "";
 
   try {
@@ -288,26 +307,72 @@ export async function POST(request: NextRequest) {
       String(formData.get("user_id") || request.headers.get("x-user-id") || ""),
       ip
     );
-    const creditGuard = await reserveMealCredit(userId, ip);
-    if (!creditGuard.allowed) {
+
+    // ── 管理员判定：频控限额与积分预扣同时豁免（允许无限次调用） ──
+    const isAdmin = isAdminRequest(request, userId);
+
+    // ── 上线测试期每日频控：普通用户 3 次 / 24 小时，管理员不限（超限 429） ──
+    const trial = await reserveTrialDailyLimit({
+      userId,
+      ip,
+      isAdmin,
+      adminToken: request.headers.get("x-admin-token"),
+    });
+    if (!trial.allowed) {
+      await db.recordVisionLog({
+        ip,
+        provider: "waf",
+        label: "VISION",
+        status: 429,
+        latency_ms: Date.now() - startTime,
+        error: "TRIAL_DAILY_LIMIT",
+      });
       return NextResponse.json(
-        {
-          detail: creditGuard.status === 402 ? "积分不足，请先充值" : "请求过于频繁，请稍后再试",
-          code: creditGuard.code,
-        },
-        {
-          status: creditGuard.status,
-          headers: creditGuard.retryAfter ? { "Retry-After": String(creditGuard.retryAfter) } : undefined,
-        }
+        { detail: trial.detail, code: trial.code, retry_after: trial.retryAfter },
+        { status: 429, headers: { "Retry-After": String(trial.retryAfter || 86400) } }
       );
     }
-    creditsReserved = true;
+    trialReserved = true;
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      console.warn("[Vision] No API key configured (GEMINI_API_KEY)");
-      await refundMealCredit(userId);
-      creditsReserved = false;
+    let remainingCredits = 0;
+    if (isAdmin) {
+      // 管理员：跳过积分预扣（与频控豁免一致），返回真实余额供前端同步
+      remainingCredits = (await db.getCredits(userId)) ?? 0;
+    } else {
+      const creditGuard = await reserveMealCredit(userId, ip);
+      if (!creditGuard.allowed) {
+        if (trialReserved) {
+          await releaseTrialDailyLimit(userId, ip);
+          trialReserved = false;
+        }
+        return NextResponse.json(
+          {
+            detail: creditGuard.status === 402 ? "积分不足，请先充值" : "请求过于频繁，请稍后再试",
+            code: creditGuard.code,
+          },
+          {
+            status: creditGuard.status,
+            headers: creditGuard.retryAfter ? { "Retry-After": String(creditGuard.retryAfter) } : undefined,
+          }
+        );
+      }
+      creditsReserved = true;
+      remainingCredits = creditGuard.remaining ?? 0;
+    }
+
+    // 主调 DeepSeek；识图兜底 Gemini Vision（仅当配置 GEMINI_API_KEY 时启用）
+    const apiKey = deepSeekApiKey();
+    const fallbackKey = visionFallbackApiKey();
+    if (!apiKey && !fallbackKey) {
+      console.warn("[Vision] No API key configured (DEEPSEEK_API_KEY / GEMINI_API_KEY)");
+      if (creditsReserved) {
+        await refundMealCredit(userId);
+        creditsReserved = false;
+      }
+      if (trialReserved) {
+        await releaseTrialDailyLimit(userId, ip);
+        trialReserved = false;
+      }
       await db.recordVisionLog({
         ip,
         provider: "api",
@@ -318,8 +383,8 @@ export async function POST(request: NextRequest) {
       });
       return NextResponse.json(
         {
-          error: "未配置 AI 视觉密钥（GEMINI_API_KEY），无法识图",
-          detail: "未配置 AI 视觉密钥（GEMINI_API_KEY），无法识图",
+          error: "未配置 AI 视觉密钥（DEEPSEEK_API_KEY），无法识图",
+          detail: "未配置 AI 视觉密钥（DEEPSEEK_API_KEY），无法识图",
           code: "NO_VISION_KEY",
         },
         { status: 503 }
@@ -327,7 +392,7 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-      const result = await analyzeWithGemini(base64, mimeType, mealType, apiKey);
+      const result = await analyzeImageWithProviders(base64, mimeType, mealType, apiKey, fallbackKey);
       console.log(`[Vision] 识别成功，命中提供商: ${result.model.label}`);
       await db.recordVisionLog({
         ip,
@@ -340,8 +405,8 @@ export async function POST(request: NextRequest) {
       });
       return NextResponse.json({
         ...result,
-        remainingCredits: creditGuard.remaining,
-        model: { ...result.model, provider: "gemini", switched: false, attempts: 1 },
+        remainingCredits,
+        model: { ...result.model, switched: false, attempts: 1 },
       });
     } catch (err: any) {
       const isParseError = /无法解析/.test(err?.message || "");
@@ -349,8 +414,12 @@ export async function POST(request: NextRequest) {
         await refundMealCredit(userId);
         creditsReserved = false;
       }
+      if (trialReserved) {
+        await releaseTrialDailyLimit(userId, ip);
+        trialReserved = false;
+      }
       console.error(
-        `[Vision] Gemini API failed (${isParseError ? "PARSE_ERROR" : "PROVIDER_ERROR"}):`,
+        `[Vision] AI API failed (${isParseError ? "PARSE_ERROR" : "PROVIDER_ERROR"}):`,
         err?.message || err
       );
       await db.recordVisionLog({
@@ -359,7 +428,7 @@ export async function POST(request: NextRequest) {
         label: "VISION",
         status: 502,
         latency_ms: Date.now() - startTime,
-        error: (err?.message || "Gemini Error").slice(0, 200),
+        error: (err?.message || "AI Error").slice(0, 200),
       });
       return NextResponse.json(
         {
@@ -374,6 +443,10 @@ export async function POST(request: NextRequest) {
     if (creditsReserved) {
       await refundMealCredit(userId);
       creditsReserved = false;
+    }
+    if (trialReserved) {
+      await releaseTrialDailyLimit(userId, ip);
+      trialReserved = false;
     }
     console.error("[Vision Error]", error);
     await db.recordVisionLog({
@@ -395,7 +468,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-type ProviderName = "gemini";
+type ProviderName = "deepseek" | "gemini";
 
 interface AnalysisResult {
   count: number;
@@ -405,10 +478,11 @@ interface AnalysisResult {
 }
 
 const PROVIDER_DISPLAY: Record<ProviderName, string> = {
+  deepseek: "DeepSeek",
   gemini: "Gemini",
 };
 
-/** 生成前端可直接展示的模型名，如 "Gemini (gemini-2.5-flash)" */
+/** 生成前端可直接展示的模型名，如 "DeepSeek (deepseek-chat)" */
 function buildModelLabel(provider: ProviderName, model: string): string {
   return `${PROVIDER_DISPLAY[provider]} (${model})`;
 }
@@ -433,14 +507,14 @@ function extractInlineImage(input: string): { mimeType: string | null; base64: s
   return { mimeType: null, base64: trimmed.replace(/\s+/g, "") };
 }
 
-/** Google Gemini Vision（原生多模态接口） */
-async function analyzeWithGemini(
+/** Google Gemini Vision（原生多模态接口；DeepSeek 识图失败时的可选兜底） */
+async function analyzeImageWithGemini(
   base64: string,
   mimeType: string,
   mealType: string,
   apiKey: string
 ): Promise<AnalysisResult> {
-  const model = normalizeGeminiModel(process.env.GEMINI_MODEL || APP_CONFIG.models.vision);
+  const model = resolveVisionFallbackModel();
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
   // ── 付费 API 自动节省 Token 模式（本地模型自动豁免、全量放开） ──
@@ -472,7 +546,7 @@ async function analyzeWithGemini(
         "Content-Type": "application/json",
         "x-goog-api-key": apiKey,
       },
-      signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+      signal: AbortSignal.timeout(AI_TIMEOUT_MS),
       body: JSON.stringify({
         contents,
         ...(systemInstruction
@@ -506,6 +580,99 @@ async function analyzeWithGemini(
     total_cal: parsed.total_cal,
     model: { provider: "gemini", model, label: buildModelLabel("gemini", model), switched: false },
   };
+}
+
+/**
+ * DeepSeek 主调识图（OpenAI 兼容 chat/completions，图片以 image_url data URI 传入）：
+ *   - 模型：DEEPSEEK_VISION_MODEL / DEEPSEEK_MODEL 覆盖，默认 deepseek-chat；
+ *   - 省钱规则：max_tokens=1000 / temperature=0.2（guardDeepSeekParams 注入）、
+ *     分辨率 ≤1024px、detail=low 与极简 System Prompt（本地豁免时全部放开）。
+ */
+async function analyzeImageWithDeepSeek(
+  base64: string,
+  mimeType: string,
+  mealType: string,
+  apiKey: string
+): Promise<AnalysisResult> {
+  const model = resolveDeepSeekModel("vision");
+  const endpoint = deepSeekChatEndpoint();
+
+  const policy = currentTokenPolicy(endpoint);
+  const image = await enforceVisionImage(base64, mimeType, policy);
+  const systemInstruction = guardSystemPrompt(policy);
+  const body = guardDeepSeekParams(
+    {
+      model,
+      stream: false,
+      messages: [
+        ...(systemInstruction ? [{ role: "system", content: systemInstruction }] : []),
+        {
+          role: "user",
+          content: [
+            { type: "text", text: buildPrompt(mealType) },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:${image.mimeType};base64,${image.base64}`,
+                ...(policy.compress ? { detail: "low" } : {}),
+              },
+            },
+          ],
+        },
+      ],
+    },
+    policy
+  );
+  logTokenGuard(policy, { vision: true, image });
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`DeepSeek API ${response.status}: ${errText.slice(0, 200)}`);
+  }
+
+  const data = await response.json();
+  const text = data?.choices?.[0]?.message?.content || "[]";
+  const parsed = parseRecords(text);
+  const records = parsed.records;
+
+  return {
+    count: records.length,
+    records,
+    total_cal: parsed.total_cal,
+    model: { provider: "deepseek", model, label: buildModelLabel("deepseek", model), switched: false },
+  };
+}
+
+/**
+ * 识图调度：DeepSeek 主调 →（失败且已配置 GEMINI_API_KEY）Gemini Vision 兜底。
+ * DeepSeek 官方文本模型不接受图片输入时快速失败，兜底保证识图可用；
+ * 两条链路都失败才返回明确错误，绝不回退 Mock 数据。
+ */
+async function analyzeImageWithProviders(
+  base64: string,
+  mimeType: string,
+  mealType: string,
+  deepSeekKey: string,
+  geminiKey: string
+): Promise<AnalysisResult> {
+  if (deepSeekKey) {
+    try {
+      return await analyzeImageWithDeepSeek(base64, mimeType, mealType, deepSeekKey);
+    } catch (err: any) {
+      if (!geminiKey) throw err;
+      console.warn(`[Vision] DeepSeek 识图失败，回退 Gemini Vision: ${err?.message || err}`);
+    }
+  }
+  return analyzeImageWithGemini(base64, mimeType, mealType, geminiKey);
 }
 
 /**

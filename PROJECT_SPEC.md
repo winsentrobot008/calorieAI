@@ -42,9 +42,10 @@
 Meal analysis applies four guardrails in order:
 
 1. **Pre-LLM cache**: normalized food names are hashed with MD5 and looked up in Upstash Redis (`calorieai:food-cache:*`). Single standard foods also resolve from the local static food database without an AI call.
-2. **Prompt and token constraints**: OpenAI-compatible completions use `max_tokens: 200` and `response_format: { type: "json_object" }`, with compact nutrition-only prompts.
+2. **Prompt and token constraints**: DeepSeek (OpenAI-compatible chat/completions) calls run through the token guard, which forces `max_tokens: 1000` and `temperature: 0.2` for paid cloud endpoints (local endpoints are exempt), with compact nutrition-only prompts.
 3. **Edge guard and credit deduction**: meal endpoints apply a distributed Redis request limit and reserve one server-side credit before gateway or provider execution. Empty balances return HTTP 402; limits return HTTP 429.
-4. **Smart model tiering**: one standard food uses the local/lightweight path. Gemini 1.5 Flash handles complex multi-food analysis after cache and credit checks.
+4. **Smart model tiering**: one standard food uses the local/lightweight path. DeepSeek (`deepseek-chat`) handles complex multi-food analysis after cache and credit checks; image recognition falls back to Gemini Vision only when `GEMINI_API_KEY` is configured.
+5. **Trial daily quota**: during the launch test period normal users get at most 3 AI requests per 24h (deduped by the server-issued user id; anonymous traffic falls back to an IP-derived id). Over-limit requests return HTTP 429 with `测试阶段普通用户每天限额 3 次，如需更多额度请联系管理员`. Admins (admin-email-derived user id, valid `x-admin-token`, or `ADMIN_API_TOKEN`) bypass the quota and also skip credit pre-deduction, so their calls are genuinely unlimited.
 
 The Redis guard uses the existing Upstash REST configuration (`KV_REST_API_URL`/`KV_REST_API_TOKEN`, with Vercel aliases). Local development without Redis retains the DAL fallback for credits.
 
@@ -234,6 +235,7 @@ python scripts/ceo_visual_demo.py --mode mobile
 
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
+| 2026.09 | **v3.6** | AI 主调切换 DeepSeek（`DEEPSEEK_API_KEY` / `https://api.deepseek.com` / `deepseek-chat`，OpenAI 兼容 chat/completions；token 守卫强制 `max_tokens: 1000` + `temperature: 0.2`；识图保留可选 Gemini Vision 兜底）+ 上线测试期频控（普通用户 3 次/24h，429 提示；管理员不限次） |
 | 2026.08 | **v3.5** | CEO 可视化巡检全面升级：smooth_move 分段插值轨迹 + human_click 拟人化点击 + 40px 点击波纹；TEMP 真实图片集上传校验（图片已优化 XXKB / 数量+约重 / 整盘总热量）；积分 -1 轮询记录；逐模式结果报告；工厂 SOP 沉淀至 `git008/docs/AI_FACTORY_SPEC.md`（桌面/移动双端全绿） |
 | 2026.08 | **v3.4** | 引入【语义级 QA 反 Mock 门禁】（smoke-api/qa_ui 动态语义探针：随机输入 + Provider 标记 + Mock 签名 FAIL 阻断）与【10 分钟套娃克隆引擎】（clone_app.mjs + TEMPLATE_APP.md + app-config.ts 集中控制 App-ID/Prompt/配色），实现套娃矩阵标准化 |
 | 2026.08 | v3.3 | 文字输入分析真实化：analyze-text 网关优先 + Gemini/OpenRouter A/B 回退，返回 records/items/totalKcal/PFC 汇总 |
