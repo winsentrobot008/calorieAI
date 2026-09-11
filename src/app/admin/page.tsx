@@ -9,6 +9,7 @@ import {
   AdminDashboardPanel,
 } from "@/components/admin/admin-panel";
 import { isAdminEmail } from "@/lib/admin-identity";
+import { setAdminToken, installAdminUnauthorizedInterceptor } from "@/lib/admin-client";
 
 const ADMIN_SESSION_KEY = "admin_session";
 
@@ -29,6 +30,10 @@ export default function AdminPage() {
   useLocale();
   const router = useRouter();
   const [state, setState] = useState<AdminPageState>({ status: "loading" });
+
+  useEffect(() => {
+    installAdminUnauthorizedInterceptor();
+  }, []);
 
   useEffect(() => {
     const saved = sessionStorage.getItem(ADMIN_SESSION_KEY);
@@ -70,11 +75,13 @@ export default function AdminPage() {
 
   const handleLogin = (session: any) => {
     sessionStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(session));
+    setAdminToken(session?.token);
     setState({ status: "ready", session });
   };
 
   const handleLogout = () => {
     sessionStorage.removeItem(ADMIN_SESSION_KEY);
+    setAdminToken("");
     router.replace("/");
   };
 

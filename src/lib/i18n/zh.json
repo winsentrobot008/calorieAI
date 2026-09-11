@@ -292,5 +292,16 @@
   "admin_chart_text": "文本分析",
   "admin_chart_image": "识图分析",
   "admin_chart_blocked": "429 拦截",
-  "admin_chart_visitors": "独立访客"
+  "admin_chart_visitors": "独立访客",
+  "admin_token_title": "管理员密钥验证",
+  "admin_token_desc": "登录会话已失效或缺少管理员令牌，请输入 ADMIN_API_TOKEN 继续。",
+  "admin_token_label": "管理员密钥 (ADMIN_API_TOKEN)",
+  "admin_token_placeholder": "请输入管理员密钥",
+  "admin_token_submit": "验证并进入",
+  "admin_token_checking": "验证中…",
+  "admin_token_cancel": "取消",
+  "admin_token_required": "请输入管理员密钥",
+  "admin_token_invalid": "密钥无效或已过期，请重新输入",
+  "admin_token_failed": "验证失败，请稍后重试",
+  "admin_token_button": "管理员密钥"
 }

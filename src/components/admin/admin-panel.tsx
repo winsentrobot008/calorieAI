@@ -2,6 +2,13 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { t } from "@/lib/i18n";
+import {
+  adminFetch,
+  getAdminToken,
+  setAdminToken,
+  installAdminUnauthorizedInterceptor,
+  ADMIN_UNAUTHORIZED_EVENT,
+} from "@/lib/admin-client";
 import { readLocalPayments, localPaymentStats } from "@/lib/local-store";
 
 // ─── Admin Login ───────────────────────────────────────────────────────
@@ -72,6 +79,103 @@ export function AdminLoginPanel({ onLogin }: { onLogin: (s: any) => void }) {
 }
 
 // ─── Admin Dashboard ───────────────────────────────────────────────────
+// ─── Admin Auth Prompt ────────────────────────────────────────────────
+/**
+ * 管理员密钥输入对话框：
+ * 任一 /api/v1/admin/* 接口返回 401（会话失效或缺少密钥）时自动弹出，
+ * 校验通过后把密钥写入 localStorage.admin_token，后续请求自动携带。
+ */
+export function AdminAuthPrompt({
+  open,
+  onClose,
+  onAuthorized,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onAuthorized: () => void;
+}) {
+  const [value, setValue] = useState("");
+  const [error, setError] = useState("");
+  const [checking, setChecking] = useState(false);
+
+  if (!open) return null;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const token = value.trim();
+    if (!token) {
+      setError(t("admin_token_required"));
+      return;
+    }
+    setChecking(true);
+    setError("");
+    try {
+      const res = await adminFetch("/api/v1/admin/overview", { silent401: true, token });
+      if (res.ok) {
+        setAdminToken(token);
+        setValue("");
+        setChecking(false);
+        onAuthorized();
+        onClose();
+        return;
+      }
+      setError(res.status === 401 ? t("admin_token_invalid") : t("admin_token_failed"));
+    } catch {
+      setError(t("admin_token_failed"));
+    }
+    setChecking(false);
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 9999,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+        background: "rgba(2, 6, 23, 0.78)",
+      }}
+    >
+      <div className="admin-login-card">
+        <h2>{t("admin_token_title")}</h2>
+        <p className="admin-login-hint">{t("admin_token_desc")}</p>
+        <form onSubmit={handleSubmit}>
+          <div className="form-group">
+            <label className="form-label">{t("admin_token_label")}</label>
+            <input
+              className="form-input"
+              type="password"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder={t("admin_token_placeholder")}
+              autoComplete="off"
+              autoFocus
+            />
+          </div>
+          {error && <p className="admin-login-error">{error}</p>}
+          <button className="submit-btn" type="submit" disabled={checking}>
+            {checking ? t("admin_token_checking") : t("admin_token_submit")}
+          </button>
+          <button
+            type="button"
+            className="admin-logout-btn"
+            style={{ marginTop: 8, width: "100%" }}
+            onClick={onClose}
+            disabled={checking}
+          >
+            {t("admin_token_cancel")}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 /** 功能开关默认卡片：KV 暂不可用时仍保证控制卡片可操作 */
 const DEFAULT_FLAGS = [
   { key: "FEATURE_VISION_ENABLED", enabled: false, default_enabled: false },
@@ -161,20 +265,23 @@ export function AdminDashboardPanel({
   const [trafficDays, setTrafficDays] = useState(7);
   const [savingFlag, setSavingFlag] = useState("");
   const [flagError, setFlagError] = useState("");
+  const [authPromptOpen, setAuthPromptOpen] = useState(false);
 
   const load = useCallback(async () => {
-    const headers = { "x-admin-token": session?.token || "" };
+    const token = getAdminToken(session?.token);
     setRefreshing(true);
     try {
       const [overview, revenue, traffic, logsRes, usersRes, models, configRes] =
         await Promise.all([
-          fetch("/api/v1/admin/overview", { headers }).then((r) => r.json()),
-          fetch("/api/v1/admin/revenue", { headers }).then((r) => r.json()),
-          fetch(`/api/v1/admin/traffic?days=${trafficDays}`, { headers }).then((r) => r.json()),
-          fetch("/api/v1/admin/logs", { headers }).then((r) => r.json()),
-          fetch("/api/v1/admin/users", { headers }).then((r) => r.json()),
-          fetch("/api/v1/admin/model-monitor", { headers }).then((r) => r.json()),
-          fetch("/api/v1/admin/config", { headers }).then((r) => r.json()),
+          adminFetch("/api/v1/admin/overview", {}, token).then((r) => r.json()),
+          adminFetch("/api/v1/admin/revenue", {}, token).then((r) => r.json()),
+          adminFetch(`/api/v1/admin/traffic?days=${trafficDays}`, {}, token).then((r) =>
+            r.json()
+          ),
+          adminFetch("/api/v1/admin/logs", {}, token).then((r) => r.json()),
+          adminFetch("/api/v1/admin/users", {}, token).then((r) => r.json()),
+          adminFetch("/api/v1/admin/model-monitor", {}, token).then((r) => r.json()),
+          adminFetch("/api/v1/admin/config", {}, token).then((r) => r.json()),
         ]);
       setData({
         overview,
@@ -197,10 +304,11 @@ export function AdminDashboardPanel({
       setSavingFlag(key);
       setFlagError("");
       try {
-        const res = await fetch("/api/v1/admin/config", {
+        const res = await adminFetch("/api/v1/admin/config", {
           method: "POST",
-          headers: { "Content-Type": "application/json", "x-admin-token": session?.token || "" },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ key, value: next }),
+          token: getAdminToken(session?.token),
         });
         const payload = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(payload.detail || t("admin_flag_failed"));
@@ -215,6 +323,13 @@ export function AdminDashboardPanel({
     },
     [session?.token]
   );
+
+  useEffect(() => {
+    installAdminUnauthorizedInterceptor();
+    const onUnauthorized = () => setAuthPromptOpen(true);
+    window.addEventListener(ADMIN_UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(ADMIN_UNAUTHORIZED_EVENT, onUnauthorized);
+  }, []);
 
   useEffect(() => {
     load();
@@ -643,6 +758,13 @@ export function AdminDashboardPanel({
           <button className="admin-logout-btn" onClick={load} disabled={refreshing}>
             {refreshing ? "…" : t("admin_refresh")}
           </button>
+          <button
+            className="admin-logout-btn"
+            onClick={() => setAuthPromptOpen(true)}
+            title={t("admin_token_button")}
+          >
+            {t("admin_token_button")}
+          </button>
           <button className="admin-logout-btn" onClick={onLogout}>
             {t("admin_logout")}
           </button>
@@ -670,6 +792,11 @@ export function AdminDashboardPanel({
       <div className="admin-content">
         <TabContent />
       </div>
+      <AdminAuthPrompt
+        open={authPromptOpen}
+        onClose={() => setAuthPromptOpen(false)}
+        onAuthorized={load}
+      />
     </div>
   );
 }

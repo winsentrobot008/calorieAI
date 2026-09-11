@@ -292,5 +292,16 @@
   "admin_chart_text": "Text",
   "admin_chart_image": "Vision",
   "admin_chart_blocked": "429 Blocked",
-  "admin_chart_visitors": "Unique Visitors"
+  "admin_chart_visitors": "Unique Visitors",
+  "admin_token_title": "Admin key required",
+  "admin_token_desc": "Your admin session expired or the token is missing. Enter ADMIN_API_TOKEN to continue.",
+  "admin_token_label": "Admin key (ADMIN_API_TOKEN)",
+  "admin_token_placeholder": "Enter admin key",
+  "admin_token_submit": "Verify & continue",
+  "admin_token_checking": "Verifying...",
+  "admin_token_cancel": "Cancel",
+  "admin_token_required": "Please enter the admin key",
+  "admin_token_invalid": "Invalid or expired key, please retry",
+  "admin_token_failed": "Verification failed, please retry later",
+  "admin_token_button": "Admin key"
 }
