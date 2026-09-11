@@ -19,7 +19,8 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@commercial-engine/*": ["../../projects/commercial-engine/*"]
     }
   },
   "include": [

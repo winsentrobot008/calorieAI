@@ -13,6 +13,7 @@ import type { DbAdapter, PaymentStats, VisionStats, VisitStats } from "./types";
 import { fileAdapter } from "./adapters/file";
 import { kvAdapter } from "./adapters/kv";
 import { postgresAdapter } from "./adapters/postgres";
+import { createCreditLedger } from "@commercial-engine/middleware/credits";
 
 function pickAdapter(): DbAdapter {
   const pgUrl = process.env.POSTGRES_URL || process.env.DATABASE_URL;
@@ -38,6 +39,9 @@ function pickAdapter(): DbAdapter {
 
 /** 全局数据库访问实例 */
 export const db: DbAdapter = pickAdapter();
+
+/** 积分账本（商业引擎统一实现：赠送 / 增减 / 写入） */
+const creditLedger = createCreditLedger(db);
 
 // ─── 统一聚合服务（适配器无关，全部基于原始数据计算） ──────────────────
 
@@ -134,18 +138,10 @@ export async function getPermanentLicenseCount(): Promise<number> {
 
 /** 读取积分；无记录时初始化赠送（默认 3）并返回 */
 export async function initCreditsIfMissing(userId: string, fallback = 3): Promise<number> {
-  const current = await db.getCredits(userId);
-  if (current === null) {
-    await db.setCredits(userId, fallback);
-    return fallback;
-  }
-  return current;
+  return creditLedger.initCreditsIfMissing(userId, fallback);
 }
 
 /** 增减积分（不低于 0），返回新余额 */
 export async function addServerCredits(userId: string, delta: number): Promise<number> {
-  const current = await initCreditsIfMissing(userId);
-  const next = Math.max(0, current + delta);
-  await db.setCredits(userId, next);
-  return next;
+  return creditLedger.addCredits(userId, delta);
 }

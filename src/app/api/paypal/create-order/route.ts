@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCreditPack, resolvePack, type CreditPack } from "@/lib/credit-packs";
+import { getLocalizedPaymentItem } from "@/lib/stripe-i18n";
 
 const PAYPAL_CLIENT_ID = process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID;
 const PAYPAL_CLIENT_SECRET = process.env.PAYPAL_CLIENT_SECRET;
@@ -37,7 +38,10 @@ async function getAccessToken(): Promise<string> {
  *
  * 按 Credits Top-up 积分包创建一次性 PayPal 订单。
  *
- * Body: { pack_id: "pack_starter" | "pack_booster" | "pack_power" }
+ * Body: { pack_id: "pack_starter" | "pack_booster" | "pack_power",
+ *         locale?, current_lang? }
+ * 商品名 / 描述统一经商业引擎 stripe-i18n 产出（EN 零汉字），
+ * 不再在路由内硬编码中文商品文案。
  */
 export async function POST(request: NextRequest) {
   try {
@@ -46,6 +50,9 @@ export async function POST(request: NextRequest) {
     if (!pack) {
       return NextResponse.json({ error: `未知积分包: ${body.pack_id}` }, { status: 400 });
     }
+
+    // 商品名 / 描述与前端语言联动（统一走商业引擎 stripe-i18n）
+    const item = getLocalizedPaymentItem(pack.id, body.locale || body.current_lang || "en");
 
     // ── Demo / Mock mode ──────────────────────────────
     if (
@@ -79,7 +86,7 @@ export async function POST(request: NextRequest) {
         purchase_units: [
           {
             reference_id: pack.id,
-            description: `CalorieAI ${pack.credits} 积分包（一次性付款，无订阅）`,
+            description: item.description,
             amount: {
               currency_code: "USD",
               value: pack.priceUsd.toFixed(2),
@@ -92,8 +99,8 @@ export async function POST(request: NextRequest) {
             },
             items: [
               {
-                name: `CalorieAI ${pack.credits} 积分包`,
-                description: `一次性付款 · 按次付费 · ${pack.credits} 积分即时到账`,
+                name: item.name,
+                description: item.description,
                 unit_amount: {
                   currency_code: "USD",
                   value: pack.priceUsd.toFixed(2),

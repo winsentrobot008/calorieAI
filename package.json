@@ -9,6 +9,7 @@
     "lint": "eslint",
     "test": "npm run test:routes && npm run test:api",
     "test:routes": "node scripts/check-routes.mjs",
+    "test:token-guard": "node scripts/check-token-guard.mjs",
     "test:api": "node scripts/smoke-api.mjs",
     "test:e2e": "npm run build && playwright test",
     "test:qa": "python ../../scripts/qa_inspect.py --url http://127.0.0.1:3100",

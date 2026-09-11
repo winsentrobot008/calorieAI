@@ -1,87 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCreditPack, resolvePack, type CreditPack } from "@/lib/credit-packs";
 import { getLocalizedPaymentItem } from "@/lib/stripe-i18n";
+import { isPlaceholderKey, resolvePaymentMethodTypes } from "@commercial-engine/middleware/payment-keys";
+import { describeStripeError } from "@commercial-engine/middleware/payment-errors";
 
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
-
-/** 判断 Stripe 密钥是否为占位值 / 未配置 */
-function isPlaceholder(value: string | undefined): boolean {
-  return (
-    !value ||
-    value === "YOUR_STRIPE_SECRET_KEY_HERE" ||
-    value === "YOUR_STRIPE_PUBLISHABLE_KEY_HERE" ||
-    value.startsWith("sk_test_placeholder") ||
-    value.startsWith("pk_test_placeholder") ||
-    /^sk_(test|live)_(x{8,}|replace)/i.test(value) ||
-    /^pk_(test|live)_(x{8,}|replace)/i.test(value)
-  );
-}
-
-/**
- * 将 Stripe SDK / API 错误翻译成前端可读的中文原因，
- * 同时保留原始 detail 供日志与高级排障。
- */
-function describeStripeError(err: any): {
-  error: string;
-  detail: string;
-  code: string;
-} {
-  const raw = err?.message || String(err || "Unknown error");
-  const code = err?.code || "";
-  const type = err?.type || "";
-  const param = err?.param || "";
-  const detail = [
-    `[Stripe] type=${type || "unknown"}`,
-    code ? `code=${code}` : "",
-    param ? `param=${param}` : "",
-    `message=${raw}`,
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  // 密钥缺失 / 无效
-  if (
-    code === "api_key_missing" ||
-    /api key|secret key|publishable key|sk_live|sk_test|pk_live|pk_test/i.test(raw)
-  ) {
-    return {
-      error: "Stripe API Key 未配置或无效，请检查 STRIPE_SECRET_KEY / NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY",
-      detail,
-      code: code || "api_key_invalid",
-    };
-  }
-
-  // 价格/商品参数无效
-  if (
-    code === "resource_missing" ||
-    /no such price|invalid price|price.*(missing|invalid|not found)|parameter_invalid/i.test(raw)
-  ) {
-    return {
-      error: "Stripe Price ID 无效或商品价格参数有误，请检查积分包价格配置",
-      detail,
-      code: code || "invalid_price_id",
-    };
-  }
-
-  // 支付方式未开通（自动降级失败时的最终兜底）
-  if (
-    /must activate|not activated|isn't activated|not enabled|not supported|cannot be used|no such payment method/i.test(raw)
-  ) {
-    return {
-      error: "该支付方式在 Stripe 账户中未开通，请改用信用卡支付或在 Stripe Dashboard 激活",
-      detail,
-      code: code || "payment_method_not_enabled",
-    };
-  }
-
-  // 其余 Stripe 错误 → 原样透出便于定位
-  return {
-    error: raw,
-    detail,
-    code: code || "stripe_error",
-  };
-}
 
 /**
  * POST /api/stripe/checkout
@@ -100,6 +24,7 @@ function describeStripeError(err: any): {
  * 响应: { sessionId: string, url: string, pack_id, credits, amount, fallback? }
  *
  * 商业化模式：Credits Top-up（积分充值/按次付费）一次性付款，取消订阅。
+ * 密钥校验（isPlaceholderKey）与失败翻译（describeStripeError）由商业引擎统一提供。
  *
  * 真实模式要求 STRIPE_SECRET_KEY 与 NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY 同时有效；
  * 任一缺失/占位时返回 mock 降级，前端可据此展示演示成功。
@@ -107,8 +32,8 @@ function describeStripeError(err: any): {
 export async function POST(request: NextRequest) {
   try {
     // ── 验证 Stripe 是否已配置 ──────────────────────────
-    const secretValid = !isPlaceholder(STRIPE_SECRET_KEY);
-    const publishableValid = !isPlaceholder(STRIPE_PUBLISHABLE_KEY);
+    const secretValid = !isPlaceholderKey(STRIPE_SECRET_KEY);
+    const publishableValid = !isPlaceholderKey(STRIPE_PUBLISHABLE_KEY);
     if (!secretValid || !publishableValid) {
       const body = await request.json().catch(() => ({}));
       const pack: CreditPack | undefined = body.pack_id
@@ -174,23 +99,14 @@ export async function POST(request: NextRequest) {
       "http://localhost:3000";
     const amountCents = Math.round(pack.priceUsd * 100);
 
-    // ── 商品名称/描述与前端语言联动（统一走 stripe-i18n）──
+    // ── 商品名称/描述与前端语言联动（统一走商业引擎 stripe-i18n）──
     // 008 SOP-04 §4.4 红线禁令 / §5 质量闸门：严禁在路由内硬编码中文商品名/描述；
-    // lang 命中 'en'（或任何非中文环境）时 name/description 100% 标准英文（零汉字），杜绝中英混杂。
+    // lang 命中 'en'（或任何非中文环境）时 name/description 100% 标准英文（零汉字）。
     const item = getLocalizedPaymentItem(pack.id, locale || current_lang || "en");
 
-    // ── 确定支持的支付方式 ──────────────────────────────
+    // ── 确定支持的支付方式（商业引擎统一白名单） ──────────────
     // 支持: 国际信用卡 + 支付宝 + 微信支付
-    const paymentMethodTypes: string[] =
-      payment_method === "all"
-        ? ["card", "alipay", "wechat_pay"]
-        : payment_method === "card"
-          ? ["card"]
-          : payment_method === "alipay"
-            ? ["alipay"]
-            : payment_method === "wechat_pay"
-              ? ["wechat_pay"]
-              : ["card", "alipay", "wechat_pay"];
+    const paymentMethodTypes: string[] = resolvePaymentMethodTypes(payment_method);
 
     // ── 构建 Checkout Session ──────────────────────────
     const sessionParams: any = {

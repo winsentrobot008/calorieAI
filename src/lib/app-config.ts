@@ -19,48 +19,51 @@ export const APP_CONFIG = {
 
   /**
    * AI 模型默认值（DeepSeek 已移除，统一使用 Google Gemini 低成本模型）。
-   * 值必须是裸模型 ID（如 "gemini-1.5-flash"），严禁带 "models/" 前缀，
-   * 否则会拼出 /v1beta/models/models/gemini-1.5-flash 双路径导致 API 404。
+   * 值必须是裸模型 ID（如 "gemini-2.5-flash"），严禁带 "models/" 前缀，
+   * 否则会拼出 /v1beta/models/models/gemini-2.5-flash 双路径导致 API 404。
    */
   models: {
-    /** 识图模型：gemini-1.5-flash（原生多模态，单次调用完成食物识别 + 营养 JSON） */
-    vision: "gemini-1.5-flash",
+    /** 识图模型：gemini-2.5-flash（原生多模态，单次调用完成食物识别 + 营养 JSON） */
+    vision: "gemini-2.5-flash",
     /** 文字分析模型 */
-    text: "gemini-1.5-flash",
+    text: "gemini-2.5-flash",
   },
 
   /** 统一 AI Prompt 工厂（按应用切换，网关 PROMPTS 表与此保持一致） */
   prompts: {
     /**
      * 识图 Prompt（精简版，极大压减 Input Tokens）：
-     * 明确字段契约与格式约束，禁止冗余解释与 Markdown
+     * 明确结构化 JSON schema（food_name / estimated_calories /
+     * macronutrients / confidence_score）与格式约束，禁止冗余解释与 Markdown。
      */
     image: (mealType: string): string =>
       `分析食物照片，清点食物并估算整盘营养。餐次:${mealType}。
-直接返回JSON数组，对象字段:
-food:食物名(含数量与总重如"小笼包 (9 颗 / 约 270g)")
-food_en:英文名
-grams:整盘总克数
-calories:整盘总热量(单品×数量)
-protein_g:整盘蛋白质g
-fat_g:整盘脂肪g
-carbs_g:整盘碳水g
-confidence:0~1置信度
-只返回JSON数组，无其他文字。`,
+只返回 JSON 数组，每项对象必须严格匹配以下 schema：
+{
+  "food_name": "食物名（含数量与整盘总重，如 \"小笼包 (9 颗 / 约 270g)\"）",
+  "estimated_calories": 整盘总热量（单品×数量）,
+  "macronutrients": { "protein_g": 整盘蛋白质g, "fat_g": 整盘脂肪g, "carbs_g": 整盘碳水g },
+  "confidence_score": 0~1 置信度
+}
+可选字段（不得影响主契约）：food_en（英文名）、grams（整盘总克数）。
+只返回 JSON，禁止 Markdown 代码块与任何额外文字。`,
 
-    /** 文字分析 Prompt（精简版）：根据用户描述估算营养（返回 JSON 数组） */
+    /**
+     * 文字分析 Prompt（精简版）：根据用户描述估算营养。
+     * 同样要求结构化 JSON schema（food_name / estimated_calories /
+     * macronutrients / confidence_score），返回 JSON 数组。
+     */
     text: (text: string, mealType: string): string =>
       `估算用户食物描述的营养。餐次:${mealType}，描述:${text}。
-直接返回JSON数组，对象字段:
-food:食物名
-food_en:英文名
-grams:克数
-calories:热量
-protein_g:蛋白质g
-fat_g:脂肪g
-carbs_g:碳水g
-confidence:0~1置信度
-只返回JSON数组，无其他文字。`,
+只返回 JSON 数组，每项对象必须严格匹配以下 schema：
+{
+  "food_name": "食物名",
+  "estimated_calories": 热量kcal,
+  "macronutrients": { "protein_g": 蛋白质g, "fat_g": 脂肪g, "carbs_g": 碳水g },
+  "confidence_score": 0~1 置信度
+}
+可选字段（不得影响主契约）：food_en（英文名）、grams（克数）。
+只返回 JSON，禁止 Markdown 代码块与任何额外文字。`,
   },
 
   /** 品牌主题配色（前端高亮/强调色，克隆时替换） */
@@ -72,9 +75,15 @@ confidence:0~1置信度
 };
 
 /**
- * 规范化 Gemini 模型 ID：剥离可能误配的 "models/" 前缀（可多次出现），
- * 确保请求 URL 恒为 /v1beta/models/<model>:generateContent，杜绝双 /models/ 404。
+ * 规范化 Gemini 模型 ID：剥离可能误配的 "models/" / "v1beta/models/" 前缀
+ * （可多次出现）与 ":generateContent" 后缀，确保请求 URL 恒为
+ * /v1beta/models/<model>:generateContent，杜绝双 /models/ 404 与拼错 URL。
+ * 空值/纯空白时回退默认低成本视觉模型 gemini-2.5-flash。
  */
 export function normalizeGeminiModel(raw: string): string {
-  return raw.trim().replace(/^(?:models\/)+/, "");
+  const cleaned = raw
+    .trim()
+    .replace(/^(?:v1beta\/)?(?:models\/)+/, "")
+    .replace(/:generateContent$/, "");
+  return cleaned || "gemini-2.5-flash";
 }

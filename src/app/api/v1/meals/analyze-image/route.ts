@@ -8,6 +8,13 @@ import {
 import { db } from "@/lib/db";
 import { APP_CONFIG, normalizeGeminiModel } from "@/lib/app-config";
 import { refundMealCredit, reserveMealCredit, resolveMealUserId } from "@/lib/cost-control";
+import {
+  currentTokenPolicy,
+  enforceVisionImage,
+  guardGeminiConfig,
+  guardSystemPrompt,
+  logTokenGuard,
+} from "@/lib/model-guard";
 
 // 图片体积上限：4MB 为请求体硬上限（在 Vercel 4.5MB Body Limit 前先拦截）；
 // ≤200KB 为 Gemini inline 数据降本上限（客户端 Canvas 压缩后通常 ~50-150KB）。
@@ -434,9 +441,32 @@ async function analyzeWithGemini(
   apiKey: string
 ): Promise<AnalysisResult> {
   const model = normalizeGeminiModel(process.env.GEMINI_MODEL || APP_CONFIG.models.vision);
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+  // ── 付费 API 自动节省 Token 模式（本地模型自动豁免、全量放开） ──
+  // 云端付费：max_tokens=1000 / temperature=0.2 / Vision detail=low + 分辨率 ≤1024px；
+  // 本地服务：不注入任何上限，允许完整思维链与详细解析。
+  const policy = currentTokenPolicy(endpoint);
+  const image = await enforceVisionImage(base64, mimeType, policy);
+  const systemInstruction = guardSystemPrompt(policy);
+  const generationConfig = guardGeminiConfig(
+    { responseMimeType: "application/json" },
+    policy,
+    { vision: true }
+  );
+  logTokenGuard(policy, { vision: true, image });
+
+  const contents = [
     {
+      parts: [
+        { text: buildPrompt(mealType) },
+        { inlineData: { mimeType: image.mimeType, data: image.base64 } },
+      ],
+    },
+  ];
+
+  const send = (config: Record<string, unknown>) =>
+    fetch(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -444,22 +474,21 @@ async function analyzeWithGemini(
       },
       signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
       body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: buildPrompt(mealType) },
-              { inlineData: { mimeType, data: base64 } },
-            ],
-          },
-        ],
-        generationConfig: {
-          maxOutputTokens: 200,
-          responseMimeType: "application/json",
-          temperature: 0.2,
-        },
+        contents,
+        ...(systemInstruction
+          ? { systemInstruction: { parts: [{ text: systemInstruction }] } }
+          : {}),
+        generationConfig: config,
       }),
-    }
-  );
+    });
+
+  let response = await send(generationConfig);
+  if (response.status === 400 && "mediaResolution" in generationConfig) {
+    // 兼容不支持 mediaResolution 的模型/环境：去掉该字段重试一次，确保识图可用性不受影响
+    const fallbackConfig: Record<string, unknown> = { ...generationConfig };
+    delete fallbackConfig.mediaResolution;
+    response = await send(fallbackConfig);
+  }
 
   if (!response.ok) {
     const errText = await response.text();

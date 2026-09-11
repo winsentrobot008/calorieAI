@@ -9,6 +9,12 @@ import { db } from "@/lib/db";
 import { APP_CONFIG, normalizeGeminiModel } from "@/lib/app-config";
 import { findLocalFoodInText, getFoodCache, setFoodCache } from "@/lib/cache/foodCache";
 import { refundMealCredit, reserveMealCredit, resolveMealUserId } from "@/lib/cost-control";
+import {
+  currentTokenPolicy,
+  guardGeminiConfig,
+  guardSystemPrompt,
+  logTokenGuard,
+} from "@/lib/model-guard";
 
 /** Gemini 调用超时（毫秒）：防止上游挂起长期占用 Serverless 实例 */
 const GEMINI_TIMEOUT_MS = 15_000;
@@ -294,25 +300,30 @@ async function analyzeTextWithGemini(
   apiKey: string
 ): Promise<TextAnalysisResult> {
   const model = normalizeGeminiModel(process.env.GEMINI_MODEL || APP_CONFIG.models.text);
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-      },
-      signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: buildTextPrompt(text, mealType) }] }],
-        generationConfig: {
-          maxOutputTokens: 200,
-          responseMimeType: "application/json",
-          temperature: 0.2,
-        },
-      }),
-    }
-  );
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+  // ── 付费 API 自动节省 Token 模式（本地模型自动豁免、全量放开） ──
+  // 云端付费：max_tokens=1000 / temperature=0.2 / System Prompt 追加极简强约束；
+  // 本地服务：不注入任何上限，允许完整思维链与详细解析。
+  const policy = currentTokenPolicy(endpoint);
+  const systemInstruction = guardSystemPrompt(policy);
+  logTokenGuard(policy);
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": apiKey,
+    },
+    signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: buildTextPrompt(text, mealType) }] }],
+      ...(systemInstruction
+        ? { systemInstruction: { parts: [{ text: systemInstruction }] } }
+        : {}),
+      generationConfig: guardGeminiConfig({ responseMimeType: "application/json" }, policy),
+    }),
+  });
   if (!response.ok) {
     const errText = await response.text();
     throw new Error(`Gemini API ${response.status}: ${errText.slice(0, 200)}`);

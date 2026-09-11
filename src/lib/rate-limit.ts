@@ -1,57 +1,26 @@
 /**
- * rate-limit — 轻量内存滑动窗口限频（best-effort）
+ * rate-limit — CalorieAI 限频适配层（商业引擎统一实现）
  *
- * 用于注册 / 验证码发送等防刷接口：
- *   - 单 IP 60 秒内仅限 1 次；
- *   - 单 IP 每小时最多 5 次。
- * 注意：Vercel Serverless 多实例下为尽力而为（每实例独立计数），
- * 生产高防建议接入 Vercel KV / Upstash 分布式限频。
+ * 权威逻辑已迁移至 commercial-engine/middleware/rate-limit.ts：
+ *   - checkRateLimit：内存滑动窗口（best-effort）
+ *   - createUpstashSlidingWindowLimiter：Upstash / Vercel KV 分布式限频
+ *
+ * 本文件保留原导出签名（auth 等路由无需改动）。
  */
 
-type Bucket = number[];
+import {
+  checkRateLimit as sharedCheckRateLimit,
+  clientIpFromHeaders,
+  type LegacyCheckResult,
+} from "@commercial-engine/middleware/rate-limit";
 
-const buckets = new Map<string, Bucket>();
+export interface RateLimitResult extends LegacyCheckResult {}
 
-export interface RateLimitResult {
-  allowed: boolean;
-  remaining?: number;
-  retryAfterMs?: number;
-}
-
-export function checkRateLimit(
-  key: string,
-  limit: number,
-  windowMs: number
-): RateLimitResult {
-  const now = Date.now();
-  const recent = (buckets.get(key) || []).filter((t) => now - t < windowMs);
-  if (recent.length >= limit) {
-    buckets.set(key, recent);
-    const oldest = recent[0];
-    return {
-      allowed: false,
-      retryAfterMs: Math.max(0, oldest + windowMs - now),
-    };
-  }
-  recent.push(now);
-  buckets.set(key, recent);
-  // 防止 Map 无限增长
-  if (buckets.size > 5000) {
-    const nowMs = Date.now();
-    for (const [k, v] of buckets) {
-      if (!v.some((t) => nowMs - t < 3600_000)) buckets.delete(k);
-    }
-  }
-  return { allowed: true, remaining: limit - recent.length };
+export function checkRateLimit(key: string, limit: number, windowMs: number): RateLimitResult {
+  return sharedCheckRateLimit(key, limit, windowMs);
 }
 
 /** 从请求头提取客户端 IP（Vercel 代理链第一位） */
 export function clientIp(request: Request): string {
-  const fwd = request.headers.get("x-forwarded-for");
-  if (fwd) return fwd.split(",")[0].trim() || "unknown";
-  return (
-    request.headers.get("x-real-ip") ||
-    request.headers.get("cf-connecting-ip") ||
-    "unknown"
-  );
+  return clientIpFromHeaders(request.headers);
 }

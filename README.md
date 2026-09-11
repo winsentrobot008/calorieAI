@@ -292,7 +292,7 @@ npm run dev
 | 5 | `PAYPAL_CLIENT_SECRET` | 可选 | PayPal 服务端密钥 |
 | 6 | `PAYPAL_API_URL` | 可选 | PayPal API 地址（Sandbox/Live） |
 | 7 | `GEMINI_API_KEY` | 推荐 | Gemini Vision 密钥（A 提供商） |
-| 8 | `GEMINI_MODEL` | 可选 | Gemini 模型（默认 `gemini-1.5-flash` 低成本视觉模型） |
+| 8 | `GEMINI_MODEL` | 可选 | Gemini 模型（默认 `gemini-2.5-flash` 低成本视觉模型） |
 | 9 | `OPENROUTER_API_KEY` | 可选 | OpenRouter 密钥（B 提供商） |
 | 10 | `OPENROUTER_MODEL` | 可选 | OpenRouter 模型（默认 `openai/gpt-4o-mini`） |
 | 11 | `POSTGRES_URL` / `DATABASE_URL` | 推荐 | Postgres 连接串（Vercel Postgres / Neon / Supabase） |
@@ -368,7 +368,7 @@ node scripts/test-stripe-e2e.mjs       # 支付全链路 E2E
 | 降本措施 | 规范 | 落地位置 |
 |----------|------|---------|
 | **前端 Canvas 压缩** | 最长边 ≤ **768px**、JPEG **quality 0.7**、体积 ≤ **200KB**；逐级降质/降边长兜底，超限报 `STILL_TOO_LARGE` | [`src/lib/image-utils.ts`](src/lib/image-utils.ts)（`handleAnalyze` 上传前调用） |
-| **低成本模型路由** | 默认视觉模型 **`gemini-1.5-flash`**（`GEMINI_MODEL` 可覆盖）；OpenRouter 兜底 `openai/gpt-4o-mini` | [`src/app/api/v1/meals/analyze-image/route.ts`](src/app/api/v1/meals/analyze-image/route.ts) |
+| **低成本模型路由** | 默认视觉模型 **`gemini-2.5-flash`**（`GEMINI_MODEL` 可覆盖）；OpenRouter 兜底 `openai/gpt-4o-mini` | [`src/app/api/v1/meals/analyze-image/route.ts`](src/app/api/v1/meals/analyze-image/route.ts) |
 | **请求参数收紧** | OpenAI 兼容接口 `max_tokens: 100` + `image_url.detail: "low"`；Gemini 原生接口不传长输出 | 同上 |
 | **极简 JSON 约束** | System Prompt 禁止 Markdown/解释文字，仅允许返回 `{"items":[{"name":"string","cal":0,"gram":0}],"total_cal":0}` | [`src/lib/app-config.ts`](src/lib/app-config.ts) `prompts.image` |
 | **每日频控** | 单 IP **30 次/日**（滑动窗口 24h）+ 每分钟 6 次双闸门；超限返回 `DAILY_RATE_LIMITED` / `RATE_LIMITED` | [`src/lib/anti-crawler.ts`](src/lib/anti-crawler.ts) + analyze-image 路由 |

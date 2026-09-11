@@ -473,7 +473,7 @@ export function AdminDashboardPanel({
                 color: "#94a3b8",
               }}
             >
-              <div>ai_provider: Gemini (gemini-1.5-flash)</div>
+              <div>ai_provider: Gemini (gemini-2.5-flash)</div>
               <div>max_recognitions_per_day: 10</div>
               <div>waf_rate_limit: 6 req/min/IP</div>
               <div>test_price: $1.00</div>
