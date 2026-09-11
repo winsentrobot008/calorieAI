@@ -87,17 +87,43 @@ export const APP_CONFIG = {
 };
 
 /**
+ * 默认兜底模型：低成本原生多模态视觉模型。
+ * 同时作为废弃模型 ID 的重定向目标，确保残留旧环境变量不再打向上游 404。
+ */
+const FALLBACK_GEMINI_MODEL = "gemini-2.5-flash";
+
+/** 显式退役清单：Google 已下线或不可用的模型 ID */
+const RETIRED_GEMINI_MODELS = new Set([
+  "gemini-pro",
+  "gemini-pro-vision",
+  "gemini-1.0-pro",
+  "gemini-1.0-pro-001",
+  "gemini-1.0-pro-vision",
+]);
+
+/** 任意 1.5 世代 ID（gemini-1.5-flash / gemini-1.5-flash-002 / gemini-1.5-pro 等） */
+const DEPRECATED_GEMINI_GENERATION = /(?:^|[^0-9])1\.5(?:[^0-9]|$)/;
+
+/** 判定废弃模型 ID：命中显式退役清单，或属于 1.5 世代 */
+function isRetiredGeminiModel(model: string): boolean {
+  const id = model.toLowerCase();
+  return RETIRED_GEMINI_MODELS.has(id) || DEPRECATED_GEMINI_GENERATION.test(id);
+}
+
+/**
  * 规范化 Gemini 模型 ID：剥离可能误配的 "models/" / "v1beta/models/" 前缀
  * （可多次出现）与 ":generateContent" 后缀，确保请求 URL 恒为
  * /v1beta/models/<model>:generateContent，杜绝双 /models/ 404 与拼错 URL。
- * 空值/纯空白时回退默认低成本视觉模型 gemini-2.5-flash。
+ * 空值/纯空白，或命中废弃模型（含 1.5 世代与 1.0 退役清单）时，
+ * 一律重定向到 gemini-2.5-flash，彻底免疫旧环境变量冲击。
  */
 export function normalizeGeminiModel(raw: string): string {
   const cleaned = raw
     .trim()
     .replace(/^(?:v1beta\/)?(?:models\/)+/, "")
     .replace(/:generateContent$/, "");
-  return cleaned || "gemini-2.5-flash";
+  if (!cleaned || isRetiredGeminiModel(cleaned)) return FALLBACK_GEMINI_MODEL;
+  return cleaned;
 }
 
 /** DeepSeek 主调端点基址（DEEPSEEK_BASE_URL 覆盖，去掉尾部斜杠） */
