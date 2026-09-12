@@ -17,15 +17,23 @@ export const FEATURE_VISION_ENABLED = "FEATURE_VISION_ENABLED";
 
 export type FeatureFlagKey = typeof FEATURE_VISION_ENABLED;
 
-/** 开关元数据：默认值 + 用途说明（默认对普通用户关闭识图） */
+/**
+ * 开关元数据：默认值 + 用途说明。
+ *
+ * 测试期默认值为 true（放行）：开关是请求前置闸门，未配置 KV、Redis 抖动
+ * 超时、或哈希字段尚未写入时一律按默认值降级。默认 false 会导致「管理后台
+ * 刚打开开关，普通用户仍被 403 拦截」——管理后台的写入只落在当前实例的
+ * 进程内 Map，其他 Serverless 实例读不到，只能各自回退到默认值。
+ * 关闭动作应由管理员显式写 KV 覆盖默认值，而不是依赖默认值本身拦截。
+ */
 export const FEATURE_FLAG_DEFINITIONS: Record<
   FeatureFlagKey,
   { label: string; description: string; defaultEnabled: boolean }
 > = {
   [FEATURE_VISION_ENABLED]: {
     label: "普通用户 AI 识图开关",
-    description: "关闭后普通用户调用识图接口返回 403，管理员始终豁免",
-    defaultEnabled: false,
+    description: "关闭后普通用户调用识图接口返回 403，管理员始终豁免（当前默认开启）",
+    defaultEnabled: true,
   },
 };
 
@@ -70,7 +78,7 @@ function parseStoredFlag(raw: unknown): boolean | null {
   return null;
 }
 
-/** 读取单个开关：Redis 哈希字段 → 进程内 → 默认值（默认 false） */
+/** 读取单个开关：Redis 哈希字段 → 进程内 → 默认值（测试期默认 true，放行） */
 export async function isFeatureEnabled(key: FeatureFlagKey): Promise<boolean> {
   const cfg = getUpstashRestConfig();
   if (cfg) {
@@ -85,10 +93,17 @@ export async function isFeatureEnabled(key: FeatureFlagKey): Promise<boolean> {
       return defaultValue(key);
     } catch (err: unknown) {
       console.warn(
-        "[feature-flags] Redis 读取失败，回退进程内开关:",
+        "[feature-flags] Redis 读取失败，按默认值降级（不阻断主流程）:",
         err instanceof Error ? err.message : err
       );
     }
+  } else {
+    // 未配置 KV：管理后台的切换只对当前实例生效，不会跨实例传播。
+    console.warn(
+      `[feature-flags] 未配置 KV_REST_API_* / UPSTASH_REDIS_REST_*，开关 ${key} 按默认值（${defaultValue(
+        key
+      )}）降级，管理后台切换不会跨实例生效`
+    );
   }
   return memoryValue(key);
 }

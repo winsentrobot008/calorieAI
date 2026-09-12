@@ -178,9 +178,12 @@ export function AdminAuthPrompt({
   );
 }
 
-/** 功能开关默认卡片：KV 暂不可用时仍保证控制卡片可操作 */
+/**
+ * 功能开关默认卡片：KV 暂不可用（或字段尚未写入）时仍保证控制卡片可操作。
+ * 默认值与 feature-flags.ts 的 defaultEnabled 保持一致（测试期默认开启）。
+ */
 const DEFAULT_FLAGS = [
-  { key: "FEATURE_VISION_ENABLED", enabled: false, default_enabled: false },
+  { key: "FEATURE_VISION_ENABLED", enabled: true, default_enabled: true },
 ];
 
 /** 轻量流量趋势图：堆叠柱状图（分类请求量）+ 折线图（独立访客），零第三方依赖 */

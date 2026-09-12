@@ -14,6 +14,7 @@ import {
   AdminDashboardPanel,
 } from "@/components/admin/admin-panel";
 import { isAdminIdentity as checkAdminIdentity } from "@/lib/admin-identity";
+import { getAdminToken } from "@/lib/admin-client";
 import {
   getProfile,
   saveProfile,
@@ -353,6 +354,29 @@ function MealRecorder({
   const getUserEmail = () =>
     typeof window !== "undefined" ? localStorage.getItem("user_email") || "" : "";
 
+  /**
+   * 动态识图闸门：读取服务端 KV 开关快照（与 analyze-image 同一判定源）。
+   *
+   * 任何网络 / 解析异常一律放行——闸门只是提前提示，绝不在配置接口不可用时
+   * 误伤用户；真正的强制拦截仍在服务端路由内完成。
+   */
+  const fetchVisionGate = async (): Promise<{ allowed: boolean; detail: string }> => {
+    try {
+      const res = await fetch(
+        `${API}/v1/config/flags?user_id=${encodeURIComponent(getUserId())}`,
+        { cache: "no-store", headers: { "x-admin-token": getAdminToken() } }
+      );
+      if (!res.ok) return { allowed: true, detail: "" };
+      const data = await res.json().catch(() => null);
+      if (data?.vision?.enabled === false) {
+        return { allowed: false, detail: data.vision.detail || t("upload_error_network") };
+      }
+      return { allowed: true, detail: "" };
+    } catch {
+      return { allowed: true, detail: "" };
+    }
+  };
+
   // Cal AI Paywall：免费次数用完后创建 $9.99/月 全英文 Stripe 订阅并跳转
   const handlePaywall = async () => {
     showToast(t("paywall_redirecting"));
@@ -432,6 +456,15 @@ function MealRecorder({
     if (!isPro && credits < 1) {
       setInsufficientOpen(true);
       addLog("[Credits] 积分不足，已拦截识图请求");
+      return;
+    }
+
+    // ── 动态 Feature Flag：普通用户识图闸门（实时读 KV，管理员服务端豁免）──
+    // 早于压缩 / 上传 / 扣分拦截，避免开关关闭期浪费拍照与流量。
+    const visionGate = await fetchVisionGate();
+    if (!visionGate.allowed) {
+      addLog("[Vision] 普通用户 AI 识图未开放，已拦截本地上传");
+      showToast(visionGate.detail);
       return;
     }
 
