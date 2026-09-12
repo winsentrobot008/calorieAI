@@ -64,7 +64,9 @@ export async function POST(request: NextRequest) {
         detail,
         pack_id: pack.id,
         credits: pack.credits,
-        amount: pack.priceUsd,
+        amount: pack.priceCny,
+        currency: "CNY",
+        amount_usd: pack.priceUsd,
         message:
           `演示模式：${detail}。设置真实密钥后自动启用 Stripe 托管支付页。`,
       });
@@ -97,7 +99,8 @@ export async function POST(request: NextRequest) {
       request.nextUrl.origin ||
       process.env.NEXT_PUBLIC_APP_URL ||
       "http://localhost:3000";
-    const amountCents = Math.round(pack.priceUsd * 100);
+    // 基准定价：1 RMB = 1 Credit，Stripe 以 CNY 按人民币基准价结算（分位）
+    const amountCents = Math.round(pack.priceCny * 100);
 
     // ── 商品名称/描述与前端语言联动（统一走商业引擎 stripe-i18n）──
     // 008 SOP-04 §4.4 红线禁令 / §5 质量闸门：严禁在路由内硬编码中文商品名/描述；
@@ -126,7 +129,7 @@ export async function POST(request: NextRequest) {
       line_items: [
         {
           price_data: {
-            currency: "usd",
+            currency: "cny",
             product_data: {
               name: item.name,
               description: item.description,
@@ -143,6 +146,8 @@ export async function POST(request: NextRequest) {
       metadata: {
         pack_id: pack.id,
         credits: String(pack.credits),
+        amount_cny: String(pack.priceCny),
+        currency: "CNY",
         amount_usd: String(pack.priceUsd),
         ...(user_id ? { user_id } : {}),
         ...(email ? { email } : {}),
@@ -152,6 +157,8 @@ export async function POST(request: NextRequest) {
         metadata: {
           pack_id: pack.id,
           credits: String(pack.credits),
+          amount_cny: String(pack.priceCny),
+          currency: "CNY",
           amount_usd: String(pack.priceUsd),
           ...(user_id ? { user_id } : {}),
           ...(email ? { email } : {}),
@@ -189,7 +196,9 @@ export async function POST(request: NextRequest) {
       url: session.url,
       pack_id: pack.id,
       credits: pack.credits,
-      amount: pack.priceUsd,
+      amount: pack.priceCny,
+      currency: "CNY",
+      amount_usd: pack.priceUsd,
       payment_methods: fallback ? FALLBACK_CARD_ONLY : paymentMethodTypes,
       fallback,
     });

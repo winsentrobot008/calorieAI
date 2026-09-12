@@ -1,6 +1,7 @@
 import type { SubscriptionRecord, PaymentRecord } from "@/lib/billing-store";
 import type { VisionLogEntry } from "@/lib/vision-log-store";
 import type { VisitRecord } from "@/lib/analytics-store";
+import type { CreditProfile } from "@git008/commercial-engine/middleware/credits";
 import type { DbAdapter, RecordPaymentInput } from "../types";
 
 /**
@@ -51,6 +52,7 @@ async function kvSet(key: string, value: unknown): Promise<void> {
 
 const K = {
   credits: (userId: string) => `calorieai:credits:${userId}`,
+  creditProfile: (userId: string) => `calorieai:credit_profile:${userId}`,
   subscriptions: "calorieai:subscriptions",
   payments: "calorieai:payments",
   visionLogs: "calorieai:vision_logs",
@@ -70,6 +72,13 @@ export const kvAdapter: DbAdapter = {
   },
   setCredits: async (userId, credits) => {
     await kvSet(K.credits(userId), Math.max(0, Math.floor(credits)));
+  },
+
+  getCreditProfile: async (userId) => kvGet<CreditProfile>(K.creditProfile(userId)),
+  setCreditProfile: async (userId, profile) => {
+    // 余额与每日计数同源写入：档案余额镜像到 credits 键，避免两处读数不一致
+    await kvSet(K.creditProfile(userId), profile);
+    await kvSet(K.credits(userId), Math.max(0, Math.floor(profile.credits)));
   },
 
   getSubscription: async (userId) => (await readMap<SubscriptionRecord>(K.subscriptions))[userId] || null,

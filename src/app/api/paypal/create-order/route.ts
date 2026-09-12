@@ -67,6 +67,8 @@ export async function POST(request: NextRequest) {
         pack_id: pack.id,
         credits: pack.credits,
         amount: pack.priceUsd,
+        amount_cny: pack.priceCny,
+        currency: "CNY",
         message: "演示模式：未配置完整的 PayPal 密钥。设置 PAYPAL_CLIENT_ID 和 PAYPAL_CLIENT_SECRET 启用真实支付。",
       });
     }
@@ -75,6 +77,9 @@ export async function POST(request: NextRequest) {
     const accessToken = await getAccessToken();
 
     // ── Create PayPal order ───────────────────────────
+    // 定价基准为人民币（1 RMB = 1 Credit）；PayPal 不支持 CNY 收款，
+    // 故按固定基准汇率折算为 USD 收款（pack.priceUsd 由 pack.priceCny 推导），
+    // 保证两条通道折算回人民币后与 ¥1 = 1 积分 基准完全一致。
     const orderRes = await fetch(`${PAYPAL_API}/v2/checkout/orders`, {
       method: "POST",
       headers: {
@@ -125,7 +130,14 @@ export async function POST(request: NextRequest) {
     }
 
     const order = await orderRes.json();
-    return NextResponse.json({ id: order.id, pack_id: pack.id, credits: pack.credits, amount: pack.priceUsd });
+    return NextResponse.json({
+      id: order.id,
+      pack_id: pack.id,
+      credits: pack.credits,
+      amount: pack.priceUsd,
+      amount_cny: pack.priceCny,
+      currency: "CNY",
+    });
   } catch (error: any) {
     console.error("[PayPal Create Order Error]", error);
     return NextResponse.json(

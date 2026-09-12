@@ -1,6 +1,7 @@
 import type { SubscriptionRecord, PaymentRecord } from "@/lib/billing-store";
 import type { VisionLogEntry } from "@/lib/vision-log-store";
 import type { VisitRecord } from "@/lib/analytics-store";
+import type { CreditProfile } from "@git008/commercial-engine/middleware/credits";
 
 export interface RecordPaymentInput {
   orderId: string;
@@ -22,6 +23,10 @@ export interface DbAdapter {
   // ── 用户积分 (Credits) ──
   getCredits(userId: string): Promise<number | null>;
   setCredits(userId: string, credits: number): Promise<void>;
+
+  // ── 用户积分档案 (每日免费额度 / 激励广告计数) ──
+  getCreditProfile(userId: string): Promise<CreditProfile | null>;
+  setCreditProfile(userId: string, profile: CreditProfile): Promise<void>;
 
   // ── Pro 订阅记录 (Subscriptions) ──
   getSubscription(userId: string): Promise<SubscriptionRecord | null>;

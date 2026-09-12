@@ -11,6 +11,7 @@
     "test:routes": "node scripts/check-routes.mjs",
     "test:token-guard": "node scripts/check-token-guard.mjs",
     "test:trial-limit": "node scripts/check-trial-limit.mjs",
+    "test:credit-rules": "node scripts/check-credit-rules.mjs",
     "test:api": "node scripts/smoke-api.mjs",
     "test:e2e": "npm run build && playwright test",
     "test:qa": "python ../../scripts/qa_inspect.py --url http://127.0.0.1:3100",

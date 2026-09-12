@@ -110,7 +110,9 @@ export async function POST(request: NextRequest) {
           orderId: capture.id,
           provider: "paypal",
           plan: pack.id,
-          amount: pack.priceUsd,
+          // 收入统一按人民币基准计价（1 RMB = 1 Credit）；实际收款为美元等值
+          amount: pack.priceCny,
+          currency: "CNY",
           email: email || capture.payer?.email_address || "",
         });
         console.log(

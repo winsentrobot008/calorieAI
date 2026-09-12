@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { db, AD_REWARD_CREDITS, DAILY_FREE_CREDITS } from "@/lib/db";
 
 /**
  * GET /api/v1/billing/status?user_id=xxx&email=xxx
@@ -18,8 +18,8 @@ export async function GET(request: NextRequest) {
       is_premium: false,
       is_permanent: false,
       remaining_daily_recognitions: 3,
-      daily_free_uses: 3,
-      ad_reward_credits: 0,
+      daily_free_uses: DAILY_FREE_CREDITS,
+      ad_reward_credits: AD_REWARD_CREDITS,
       free_tier: true,
       subscription: null,
     });
@@ -37,8 +37,8 @@ export async function GET(request: NextRequest) {
       is_premium: false,
       is_permanent: false,
       remaining_daily_recognitions: 3,
-      daily_free_uses: 3,
-      ad_reward_credits: 0,
+      daily_free_uses: DAILY_FREE_CREDITS,
+      ad_reward_credits: AD_REWARD_CREDITS,
       free_tier: true,
       subscription: null,
     });
@@ -61,8 +61,8 @@ export async function GET(request: NextRequest) {
     is_premium: isPremium,
     is_permanent: isPermanent,
     remaining_daily_recognitions: remainingDaily,
-    daily_free_uses: 3,
-    ad_reward_credits: 0,
+    daily_free_uses: DAILY_FREE_CREDITS,
+    ad_reward_credits: AD_REWARD_CREDITS,
     free_tier: !isPremium,
     subscription: {
       plan: record.plan,

@@ -17,6 +17,11 @@ export const fileAdapter: DbAdapter = {
     credits.setCredits(userId, value);
   },
 
+  getCreditProfile: async (userId) => credits.getCreditProfile(userId),
+  setCreditProfile: async (_userId, profile) => {
+    credits.setCreditProfile(profile);
+  },
+
   getSubscription: async (userId) => billing.getSubscription(userId),
   getSubscriptionByEmail: async (email) => billing.getSubscriptionByEmail(email),
   getSubscriptionByStripeCustomerId: async (customerId) => billing.getSubscriptionByStripeCustomerId(customerId),

@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
-import { db, addServerCredits } from "@/lib/db";
+import {
+  db,
+  addServerCredits,
+  ensureDailyQuota,
+  AD_DAILY_LIMIT,
+  AD_REWARD_CREDITS,
+  DAILY_FREE_CREDITS,
+} from "@/lib/db";
 import { getAdminAuth } from "@/lib/admin-auth";
 
 /**
@@ -9,12 +16,17 @@ import { getAdminAuth } from "@/lib/admin-auth";
  * 返回服务器持久化的积分余额与 Pro 状态。
  * 冷启动 / 跨设备访问时，前端以此为准保证积分与权限完全一致。
  *
- * 只读语义：绝不隐式创建账号或赠送免费额度，账号不存在时返回 0。
+ * 日切结算：请求若已跨 UTC 自然日，自动把每日免费额度补足到 3 分并清零
+ * 每日广告计数（last_reset_timestamp / daily_free_used / daily_ad_views_today）。
+ *
+ * 只读安全语义：账号不存在（无档案且无余额）时返回 0，绝不隐式建号或赠送额度。
  * 首次赠送只在登录 / 注册（受 Turnstile 与人机校验保护）时发生。
  */
 export async function GET(request: NextRequest) {
   const userId = new URL(request.url).searchParams.get("user_id") || "anonymous";
-  const credits = (await db.getCredits(userId)) ?? 0;
+  // create=false：仅对已有账号做日切结算，缺失账号不隐式建号
+  const profile = await ensureDailyQuota(userId, false);
+  const credits = profile?.credits ?? (await db.getCredits(userId)) ?? 0;
   const sub = await db.getSubscription(userId);
   const isPro = !!sub?.is_active;
   return NextResponse.json({
@@ -23,6 +35,12 @@ export async function GET(request: NextRequest) {
     status: isPro ? "pro" : "free",
     has_active_subscription: isPro,
     user_id: userId,
+    daily_free_quota: DAILY_FREE_CREDITS,
+    daily_free_used: profile?.daily_free_used ?? 0,
+    daily_ad_views_today: profile?.daily_ad_views_today ?? 0,
+    daily_ad_limit: AD_DAILY_LIMIT,
+    ad_reward_credits: AD_REWARD_CREDITS,
+    last_reset_timestamp: profile?.last_reset_timestamp ?? 0,
   });
 }
 

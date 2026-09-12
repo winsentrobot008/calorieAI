@@ -13,7 +13,11 @@ import type { DbAdapter, PaymentStats, VisionStats, VisitStats } from "./types";
 import { fileAdapter } from "./adapters/file";
 import { kvAdapter } from "./adapters/kv";
 import { postgresAdapter } from "./adapters/postgres";
-import { createCreditLedger } from "@git008/commercial-engine/middleware/credits";
+import {
+  createCreditLedger,
+  createDailyQuotaService,
+  type CreditProfile,
+} from "@git008/commercial-engine/middleware/credits";
 
 function pickAdapter(): DbAdapter {
   const pgUrl = process.env.POSTGRES_URL || process.env.DATABASE_URL;
@@ -42,6 +46,14 @@ export const db: DbAdapter = pickAdapter();
 
 /** 积分账本（商业引擎统一实现：赠送 / 增减 / 写入） */
 const creditLedger = createCreditLedger(db);
+
+/**
+ * 每日免费额度 / 激励广告服务（商业引擎统一实现）
+ *
+ * 结算字段（last_reset_timestamp / daily_free_used / daily_ad_views_today）
+ * 与余额同库持久化；跨 UTC 自然日自动补足免费额度并清零每日计数。
+ */
+const dailyQuota = createDailyQuotaService(db);
 
 // ─── 统一聚合服务（适配器无关，全部基于原始数据计算） ──────────────────
 
@@ -145,3 +157,41 @@ export async function initCreditsIfMissing(userId: string, fallback = 3): Promis
 export async function addServerCredits(userId: string, delta: number): Promise<number> {
   return creditLedger.addCredits(userId, delta);
 }
+
+// ─── 每日免费额度 / 激励广告（对外统一出口） ──────────────────────────────
+
+/**
+ * 日切结算：跨自然日则补足免费额度到 3 分、清零每日广告计数。
+ * create=false 时对「无档案且无余额」的账号返回 null（只读接口不隐式建号）。
+ */
+export async function ensureDailyQuota(
+  userId: string,
+  create = true
+): Promise<CreditProfile | null> {
+  return dailyQuota.ensureDailyQuota(userId, { create });
+}
+
+/** 领取 1 次激励广告奖励（+1 积分）；达到每日 3 次上限时返回 AD_DAILY_LIMIT_REACHED */
+export async function claimAdReward(userId: string) {
+  return dailyQuota.claimAdReward(userId);
+}
+
+/** 记录今日已消耗的免费额度（AI 识图扣分后调用，best-effort） */
+export async function recordFreeCreditUsed(userId: string, amount = 1) {
+  return dailyQuota.recordFreeCreditUsed(userId, amount);
+}
+
+/** 归还今日已消耗的免费额度（AI 调用失败退分后调用，best-effort） */
+export async function restoreFreeCreditUsed(userId: string, amount = 1) {
+  return dailyQuota.restoreFreeCreditUsed(userId, amount);
+}
+
+export {
+  AD_DAILY_LIMIT,
+  AD_DAILY_LIMIT_CODE,
+  AD_REWARD_CREDITS,
+  DAILY_FREE_CREDITS,
+  isNewUtcDay,
+  utcDayKey,
+} from "@git008/commercial-engine/middleware/credits";
+export type { CreditProfile } from "@git008/commercial-engine/middleware/credits";

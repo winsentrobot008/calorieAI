@@ -1,11 +1,11 @@
 /**
  * local-store — 客户端本地积分与支付流水存储（localStorage）
  *
- * 积分规则（Credits Top-up 一次性付费模式，2026-08 定稿）:
- *   - 新用户初始化赠送 3 积分；
+ * 积分规则（Credits Top-up 一次性付费模式，2026-09 定稿 · 1 RMB = 1 Credit）:
+ *   - 新用户初始化赠送 3 积分，每个自然日（UTC 日边界）自动补足回 3 积分；
  *   - AI 识图每次固定扣 1 积分；
- *   - 看 1 次激励广告 +10 积分；
- *   - 购买积分包一次性到账（10/50/120 积分），无订阅、无自动续费。
+ *   - 看 1 次激励广告 +1 积分，单账号每日最多 3 次（服务端权威计数）；
+ *   - 购买积分包一次性到账（¥1=1 / ¥10=10 / ¥30=35 积分），无订阅、无自动续费。
  */
 
 export const CREDIT_KEY = "user_credits";
@@ -14,7 +14,12 @@ export const PRO_KEY = "user_pro";
 /** 自动化演示专用 Pro 标记（仅由 ceo_visual_demo.py 等自动化脚本注入） */
 export const DEMO_PRO_KEY = "calorieai_demo_pro";
 export const DEFAULT_CREDITS = 3;
-export const AD_REWARD_CREDITS = 10;
+/** 每日免费额度（与商业引擎 DAILY_FREE_CREDITS 对齐） */
+export const DAILY_FREE_CREDITS = 3;
+/** 单次激励广告奖励积分：1 广告 = 1 积分（与引擎 AD_REWARD_CREDITS 对齐） */
+export const AD_REWARD_CREDITS = 1;
+/** 单账号每日激励广告上限（与引擎 AD_DAILY_LIMIT 对齐） */
+export const AD_DAILY_LIMIT = 3;
 export const AD_COUNTDOWN_SECONDS = 4;
 export const PAYMENT_CREDIT_BONUS = 10;
 

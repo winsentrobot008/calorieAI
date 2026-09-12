@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, addServerCredits } from "@/lib/db";
+import { CNY_PER_USD } from "@/lib/credit-packs";
 
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
@@ -57,6 +58,9 @@ export async function POST(request: NextRequest) {
         const packId = session.metadata?.pack_id || "";
         const credits = Number(session.metadata?.credits || 0);
         const amountUsd = Number(session.metadata?.amount_usd || 1.0);
+        // 收入统一按人民币基准计价（1 RMB = 1 Credit）：优先取 amount_cny，
+        // 历史会话缺该字段时按固定基准汇率由美元折算，避免同一口径混币种。
+        const amountCny = Number(session.metadata?.amount_cny || (amountUsd * CNY_PER_USD).toFixed(2));
 
         if (!packId || !Number.isFinite(credits) || credits <= 0) {
           console.warn("[Stripe Webhook] 非积分包会话，跳过入账:", session.id);
@@ -69,7 +73,8 @@ export async function POST(request: NextRequest) {
           orderId: session.id,
           provider: "stripe",
           plan: packId,
-          amount: amountUsd,
+          amount: amountCny,
+          currency: "CNY",
           email,
         });
 

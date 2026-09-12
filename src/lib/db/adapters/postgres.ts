@@ -2,6 +2,7 @@ import { Pool } from "pg";
 import type { SubscriptionRecord, PaymentRecord } from "@/lib/billing-store";
 import type { VisionLogEntry } from "@/lib/vision-log-store";
 import type { VisitRecord } from "@/lib/analytics-store";
+import type { CreditProfile } from "@git008/commercial-engine/middleware/credits";
 import type { DbAdapter, RecordPaymentInput } from "../types";
 
 /**
@@ -35,8 +36,14 @@ function ensureTables(): Promise<void> {
       CREATE TABLE IF NOT EXISTS calorieai_credits (
         user_id TEXT PRIMARY KEY,
         credits INT NOT NULL DEFAULT 0,
+        last_reset_timestamp BIGINT NOT NULL DEFAULT 0,
+        daily_free_used INT NOT NULL DEFAULT 0,
+        daily_ad_views_today INT NOT NULL DEFAULT 0,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      ALTER TABLE calorieai_credits ADD COLUMN IF NOT EXISTS last_reset_timestamp BIGINT NOT NULL DEFAULT 0;
+      ALTER TABLE calorieai_credits ADD COLUMN IF NOT EXISTS daily_free_used INT NOT NULL DEFAULT 0;
+      ALTER TABLE calorieai_credits ADD COLUMN IF NOT EXISTS daily_ad_views_today INT NOT NULL DEFAULT 0;
       CREATE TABLE IF NOT EXISTS calorieai_subscriptions (
         user_id TEXT PRIMARY KEY,
         data JSONB NOT NULL,
@@ -98,6 +105,52 @@ export const postgresAdapter: DbAdapter = {
        VALUES ($1, $2, NOW())
        ON CONFLICT (user_id) DO UPDATE SET credits = EXCLUDED.credits, updated_at = NOW()`,
       [userId, Math.max(0, Math.floor(credits))]
+    );
+  },
+
+  getCreditProfile: async (userId) => {
+    const rows = await query<{
+      user_id: string;
+      credits: number;
+      last_reset_timestamp: string | number;
+      daily_free_used: number;
+      daily_ad_views_today: number;
+      updated_at: Date | string;
+    }>(
+      `SELECT user_id, credits, last_reset_timestamp, daily_free_used, daily_ad_views_today, updated_at
+         FROM calorieai_credits WHERE user_id = $1`,
+      [userId]
+    );
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      user_id: row.user_id,
+      credits: Math.max(0, Math.floor(Number(row.credits) || 0)),
+      // BIGINT 列经 pg 驱动回读为字符串，统一转 number（epoch ms）
+      last_reset_timestamp: Math.max(0, Math.floor(Number(row.last_reset_timestamp) || 0)),
+      daily_free_used: Math.max(0, Math.floor(Number(row.daily_free_used) || 0)),
+      daily_ad_views_today: Math.max(0, Math.floor(Number(row.daily_ad_views_today) || 0)),
+      updated_at: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
+    };
+  },
+  setCreditProfile: async (userId, profile) => {
+    await query(
+      `INSERT INTO calorieai_credits
+         (user_id, credits, last_reset_timestamp, daily_free_used, daily_ad_views_today, updated_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET
+         credits = EXCLUDED.credits,
+         last_reset_timestamp = EXCLUDED.last_reset_timestamp,
+         daily_free_used = EXCLUDED.daily_free_used,
+         daily_ad_views_today = EXCLUDED.daily_ad_views_today,
+         updated_at = NOW()`,
+      [
+        userId,
+        Math.max(0, Math.floor(profile.credits)),
+        Math.max(0, Math.floor(profile.last_reset_timestamp)),
+        Math.max(0, Math.floor(profile.daily_free_used)),
+        Math.max(0, Math.floor(profile.daily_ad_views_today)),
+      ]
     );
   },
 

@@ -6,8 +6,11 @@
  */
 
 export {
+  CNY_PER_CREDIT,
+  CNY_PER_USD,
   CREDIT_PACKS,
   DEFAULT_PACK_ID,
+  cnyToUsd,
   getCreditPack,
   resolvePack,
   type CreditPack,

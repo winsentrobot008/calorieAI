@@ -5,6 +5,7 @@
  *   - Upstash 分布式限频（429，@upstash/ratelimit 滑窗由本适配层注入）
  *   - 原子扣积分（402 INSUFFICIENT_CREDITS）
  *   - 失败退分（refund）与身份裁定（resolveMealUserId）
+ *   - 每日免费额度消耗记账（daily_free_used，随扣分/退分同步增减）
  *
  * 本文件保留原导出签名，路由无需改动；存储经本地 db 适配器注入。
  */
@@ -17,7 +18,7 @@ import {
 import type { DistributedRateLimiter } from "@git008/commercial-engine/middleware/rate-limit";
 import { isAdminToken, isAdminUserId } from "@/lib/admin-access";
 import { createDistributedLimiter } from "@/lib/anti-crawler";
-import { db, initCreditsIfMissing } from "@/lib/db";
+import { db, initCreditsIfMissing, recordFreeCreditUsed, restoreFreeCreditUsed } from "@/lib/db";
 import { consumeTrialQuota, releaseTrialQuota } from "@/lib/trial-quota";
 import { anonymousUserId, isServerIssuedUserId } from "@/lib/user-identity";
 
@@ -61,8 +62,17 @@ const guard = createMealCreditGuard({
 
 export type { MealGuardResult };
 
-export function reserveMealCredit(userId: string, ip: string): Promise<MealGuardResult> {
-  return guard(userId, ip);
+export async function reserveMealCredit(userId: string, ip: string): Promise<MealGuardResult> {
+  const result = await guard(userId, ip);
+  // 扣分成功 → 计入「本自然日已消耗免费额度」（best-effort，绝不影响扣分结果）
+  if (result.allowed) {
+    try {
+      await recordFreeCreditUsed(userId, 1);
+    } catch (err: unknown) {
+      console.error("[DailyQuota] 记录免费额度失败:", err instanceof Error ? err.message : err);
+    }
+  }
+  return result;
 }
 
 const refundMealCreditAtomic = createMealCreditRefund({
@@ -93,6 +103,12 @@ export async function refundMealCredit(userId: string, amount = 1): Promise<void
     await refundMealCreditAtomic(userId, amount);
   } catch (err: unknown) {
     console.error("[Credits] 退分失败:", err instanceof Error ? err.message : err);
+  }
+  // 退分成功 → 同步归还「本自然日已消耗免费额度」（best-effort）
+  try {
+    await restoreFreeCreditUsed(userId, amount);
+  } catch (err: unknown) {
+    console.error("[DailyQuota] 归还免费额度失败:", err instanceof Error ? err.message : err);
   }
 }
 

@@ -47,6 +47,7 @@ import {
   recordLocalPayment,
   AD_REWARD_CREDITS,
   AD_COUNTDOWN_SECONDS,
+  AD_DAILY_LIMIT,
   DEFAULT_CREDITS,
 } from "@/lib/local-store";
 
@@ -918,9 +919,9 @@ function BillingModal({
       onServerPaymentSuccess?.();
       return;
     }
-    recordLocalPayment({ orderId: orderId || `pay_${Date.now()}`, provider, plan: pack.id, amount: pack.priceUsd });
+    recordLocalPayment({ orderId: orderId || `pay_${Date.now()}`, provider, plan: pack.id, amount: pack.priceCny });
     onPaymentSuccess(creditsAdded ?? pack.credits);
-    addLog(`[BILLING] 支付完成: ${pack.id}（${provider}）入账 $${pack.priceUsd.toFixed(2)}，+${creditsAdded ?? pack.credits} 积分`);
+    addLog(`[BILLING] 支付完成: ${pack.id}（${provider}）入账 ¥${pack.priceCny}，+${creditsAdded ?? pack.credits} 积分`);
   };
 
   // ── Select pack → reset payment method ──────────────
@@ -1087,7 +1088,7 @@ function BillingModal({
               {idx === 1 && <div className="plan-badge">{t("billing_most_popular")}</div>}
               <div className="plan-name">{t(pack.labelKey)}</div>
               <div className="plan-price">
-                <span className="price">${pack.priceUsd.toFixed(2)}</span>
+                <span className="price">¥{pack.priceCny}</span>
                 <span className="period">{t("billing_one_time")}</span>
               </div>
               <div className="plan-save">{pack.credits} {t("credits_label")}</div>
@@ -1097,7 +1098,7 @@ function BillingModal({
                 <li>{t("billing_pack_feature_1credit_per_scan")}</li>
               </ul>
               <button className="btn-primary plan-btn" onClick={() => handleSelectPack(pack.id)}>
-                {t("billing_select_pack", { credits: pack.credits, price: `$${pack.priceUsd.toFixed(2)}` })}
+                {t("billing_select_pack", { credits: pack.credits, price: `¥${pack.priceCny}` })}
               </button>
             </div>
           ))}
@@ -1156,9 +1157,9 @@ function BillingModal({
                 </span>
               ) : (
                 <>
-                  {paymentMethod === "card" && t("billing_pay_btn_card", { amount: `$${selectedPack.priceUsd.toFixed(2)}` })}
-                  {paymentMethod === "alipay" && t("billing_pay_btn_alipay", { amount: `¥${Math.round(selectedPack.priceUsd * 7.2)}` })}
-                  {paymentMethod === "wechat_pay" && t("billing_pay_btn_wechat", { amount: `¥${Math.round(selectedPack.priceUsd * 7.2)}` })}
+                  {paymentMethod === "card" && t("billing_pay_btn_card", { amount: `¥${selectedPack.priceCny}` })}
+                  {paymentMethod === "alipay" && t("billing_pay_btn_alipay", { amount: `¥${selectedPack.priceCny}` })}
+                  {paymentMethod === "wechat_pay" && t("billing_pay_btn_wechat", { amount: `¥${selectedPack.priceCny}` })}
                 </>
               )}
             </button>
@@ -1231,6 +1232,8 @@ export default function Home() {
   const [isPro, setIsPro] = useState(false);
   const [credits, setCredits] = useState(DEFAULT_CREDITS);
   const [adOpen, setAdOpen] = useState(false);
+  /** 本自然日已领取的激励广告次数（服务端权威计数，用于提前禁用按钮） */
+  const [adViewsToday, setAdViewsToday] = useState(0);
   const [mealType, setMealType] = useState<MealType>("breakfast");
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [mealLogTick, setMealLogTick] = useState(0);
@@ -1282,6 +1285,8 @@ export default function Home() {
           d.has_active_subscription === true;
         writeProFlag(pro);
         setIsPro(pro);
+        // 每日广告计数以服务端为准（达到上限时前端直接禁用观看按钮）
+        setAdViewsToday(Number(d.daily_ad_views_today) || 0);
       }
       return d;
     } catch {
@@ -1356,6 +1361,9 @@ export default function Home() {
         if (d && typeof d.is_pro === "boolean") {
           writeProFlag(d.is_pro);
           setIsPro(d.is_pro);
+        }
+        if (d && typeof d.daily_ad_views_today === "number") {
+          setAdViewsToday(d.daily_ad_views_today);
         }
       })
       .catch(() => {});
@@ -1479,8 +1487,16 @@ export default function Home() {
             : `${t("credits_label")}: ${credits} - ${t("credits_free_trial")}`}
           {effectiveIsPro && <span className="credit-pro-note"> · {t("credits_pro_note")}</span>}
         </span>
-        <button className="ad-reward-btn" onClick={() => setAdOpen(true)}>
+        <button
+          className="ad-reward-btn"
+          onClick={() => setAdOpen(true)}
+          disabled={adViewsToday >= AD_DAILY_LIMIT}
+        >
           📺 {t("ad_reward_btn")} (+{AD_REWARD_CREDITS})
+          {" · "}
+          {adViewsToday >= AD_DAILY_LIMIT
+            ? t("ad_daily_limit_reached")
+            : `${AD_DAILY_LIMIT - adViewsToday}/${AD_DAILY_LIMIT}`}
         </button>
       </div>
 
