@@ -9,4 +9,4 @@
  *
  * 还原方式：把 ADMIN_AUTH_BYPASS 改回 false，即可完整恢复原有鉴权链路。
  */
-export const ADMIN_AUTH_BYPASS = true;
+export const ADMIN_AUTH_BYPASS = false;

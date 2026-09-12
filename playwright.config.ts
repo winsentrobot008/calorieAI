@@ -1,4 +1,39 @@
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
+
+/**
+ * 注入 .env.local：Playwright 不会读取 Next.js 的 env 文件，
+ * 但 Midscene 需要从 process.env 拿到 OPENAI_API_KEY / MIDSCENE_MODEL_NAME。
+ *
+ * 注意：本机 User 级环境变量存在 OPENAI_API_KEY=ollama（本地 Ollama），
+ * 若不覆盖就会静默顶掉 Gemini 配置，因此此处以 .env.local 为准。
+ * 该文件已被 .gitignore 排除，CI 上不存在，故不会影响流水线注入。
+ */
+function loadLocalEnv(): void {
+  // Playwright 把 TS 配置编译为 CJS（__dirname 可用）；原生 ESM 下退回 cwd。
+  const configDir = typeof __dirname === "string" ? __dirname : process.cwd();
+  const envPath = resolve(configDir, ".env.local");
+  if (!existsSync(envPath)) return;
+  for (const rawLine of readFileSync(envPath, "utf8").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const separator = line.indexOf("=");
+    if (separator <= 0) continue;
+    const key = line.slice(0, separator).trim();
+    let value = line.slice(separator + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    // .env.local 优先于继承来的环境变量（见上方说明）。
+    process.env[key] = value;
+  }
+}
+
+loadLocalEnv();
 
 const PORT = 3100;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
