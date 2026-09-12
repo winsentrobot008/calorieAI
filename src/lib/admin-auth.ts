@@ -5,9 +5,13 @@
  *   1. 读取 x-admin-token（或 Authorization: Bearer）;
  *   2. 命中静态管理员密钥（ADMIN_API_TOKEN 等）或登录时签发的服务端会话令牌；
  *   3. 无效/缺失 → 401，绝不返回任何业务数据。
+ *
+ * 测试期临时旁路：ADMIN_AUTH_BYPASS 为 true 时 getAdminAuth 直接放行
+ * （见 admin-auth-bypass.ts），正式上线前必须还原为 false。
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { ADMIN_AUTH_BYPASS } from "./admin-auth-bypass";
 import { getAdminSession, type AdminSession } from "./admin-session";
 import { adminStaticTokens, adminTokenFromRequest } from "./admin-access";
 
@@ -15,7 +19,23 @@ export type AdminAuthResult =
   | { ok: true; session: AdminSession }
   | { ok: false; response: NextResponse };
 
+/** 测试期旁路会话：跳过令牌校验，但仍保留审计所需的身份字段 */
+function bypassSession(request: NextRequest): AdminSession {
+  return {
+    token: adminTokenFromRequest(request) || "admin_auth_bypass",
+    admin_id: "admin_auth_bypass",
+    username: "admin",
+    role: "superadmin",
+    display_name: "Admin (auth bypass)",
+    created_at: new Date().toISOString(),
+  };
+}
+
 export function getAdminAuth(request: NextRequest): AdminAuthResult {
+  // 测试期临时旁路：任何请求均视为已授权，不再返回 401。
+  if (ADMIN_AUTH_BYPASS) {
+    return { ok: true, session: bypassSession(request) };
+  }
   const token = adminTokenFromRequest(request);
   if (!token) {
     return {

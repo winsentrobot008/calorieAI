@@ -8,7 +8,12 @@
  *   3. 全局 401 拦截：任一 /api/v1/admin/*（login 除外）返回 401 时，
  *      立即清空本地失效令牌并广播 ADMIN_UNAUTHORIZED_EVENT，
  *      由 /admin 页面弹出管理员密钥输入对话框重新鉴权，避免停留在全 0 状态。
+ *
+ * 测试期临时旁路：ADMIN_AUTH_BYPASS 为 true 时跳过上述 401 拦截，
+ * 不清空本地令牌、不广播弹窗事件（见 admin-auth-bypass.ts）。
  */
+
+import { ADMIN_AUTH_BYPASS } from "@/lib/admin-auth-bypass";
 
 export const ADMIN_TOKEN_KEY = "admin_token";
 export const ADMIN_UNAUTHORIZED_EVENT = "admin:unauthorized";
@@ -66,6 +71,8 @@ export function isAdminDataUrl(url: string): boolean {
 
 /** 401 统一处理：清空失效令牌 + 广播弹窗事件 */
 function handleAdminUnauthorized(): void {
+  // 测试期临时旁路：不再清空本地令牌，也不触发管理员密钥弹窗。
+  if (ADMIN_AUTH_BYPASS) return;
   clearAdminToken();
   if (typeof window !== "undefined") {
     window.dispatchEvent(new Event(ADMIN_UNAUTHORIZED_EVENT));

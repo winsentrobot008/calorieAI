@@ -9,6 +9,7 @@ import {
   installAdminUnauthorizedInterceptor,
   ADMIN_UNAUTHORIZED_EVENT,
 } from "@/lib/admin-client";
+import { ADMIN_AUTH_BYPASS } from "@/lib/admin-auth-bypass";
 import { readLocalPayments, localPaymentStats } from "@/lib/local-store";
 
 // ─── Admin Login ───────────────────────────────────────────────────────
@@ -98,7 +99,8 @@ export function AdminAuthPrompt({
   const [error, setError] = useState("");
   const [checking, setChecking] = useState(false);
 
-  if (!open) return null;
+  // 测试期临时旁路：不再渲染管理员密钥输入对话框。
+  if (ADMIN_AUTH_BYPASS || !open) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -326,7 +328,9 @@ export function AdminDashboardPanel({
 
   useEffect(() => {
     installAdminUnauthorizedInterceptor();
-    const onUnauthorized = () => setAuthPromptOpen(true);
+    const onUnauthorized = () => {
+      if (!ADMIN_AUTH_BYPASS) setAuthPromptOpen(true);
+    };
     window.addEventListener(ADMIN_UNAUTHORIZED_EVENT, onUnauthorized);
     return () => window.removeEventListener(ADMIN_UNAUTHORIZED_EVENT, onUnauthorized);
   }, []);
@@ -758,13 +762,15 @@ export function AdminDashboardPanel({
           <button className="admin-logout-btn" onClick={load} disabled={refreshing}>
             {refreshing ? "…" : t("admin_refresh")}
           </button>
-          <button
-            className="admin-logout-btn"
-            onClick={() => setAuthPromptOpen(true)}
-            title={t("admin_token_button")}
-          >
-            {t("admin_token_button")}
-          </button>
+          {!ADMIN_AUTH_BYPASS && (
+            <button
+              className="admin-logout-btn"
+              onClick={() => setAuthPromptOpen(true)}
+              title={t("admin_token_button")}
+            >
+              {t("admin_token_button")}
+            </button>
+          )}
           <button className="admin-logout-btn" onClick={onLogout}>
             {t("admin_logout")}
           </button>
