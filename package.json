@@ -14,6 +14,7 @@
     "test:credit-rules": "node scripts/check-credit-rules.mjs",
     "test:api": "node scripts/smoke-api.mjs",
     "test:e2e": "npm run build && playwright test",
+    "test:visual": "playwright test e2e/smoke.spec.ts",
     "test:qa": "python ../../scripts/qa_inspect.py --url http://127.0.0.1:3100",
     "qa:ui": "python scripts/qa_ui.py --url http://127.0.0.1:3100",
     "demo:visual": "python scripts/ceo_visual_demo.py",
@@ -32,7 +33,8 @@
     "stripe": "^22.3.2"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.1",
+    "@midscene/web": "^1.12.6",
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/pg": "^8.21.0",

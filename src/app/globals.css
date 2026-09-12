@@ -37,17 +37,23 @@ body {
 .app {
   display: flex; flex-direction: column; min-height: 100vh;
   max-width: 480px; margin: 0 auto; padding: 0 12px;
+  width: 100%; min-width: 0;
 }
 
 /* ── Header ── */
 .header {
-  display: flex; justify-content: space-between; align-items: center;
+  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center;
+  gap: 8px 12px;
   padding: 16px 0 8px;
 }
-.header-left { display: flex; align-items: center; gap: 10px; }
-.header-right { display: flex; align-items: center; gap: 8px; }
+.header-left { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; }
+.header-right {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end;
+  gap: 8px; min-width: 0;
+}
 .logo {
   font-size: 16px; font-weight: 700;
+  white-space: nowrap;
   background: linear-gradient(135deg, var(--accent-from), var(--accent-to));
   -webkit-background-clip: text; -webkit-text-fill-color: transparent;
   cursor: pointer;
