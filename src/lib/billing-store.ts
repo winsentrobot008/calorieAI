@@ -21,4 +21,4 @@ export {
   upsertSubscription,
   type PaymentRecord,
   type SubscriptionRecord,
-} from "@commercial-engine/middleware/billing-store";
+} from "@git008/commercial-engine/middleware/billing-store";

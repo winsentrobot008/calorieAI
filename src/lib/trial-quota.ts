@@ -9,7 +9,7 @@
  * 退还：ZREMRANGEBYRANK(-1,-1) 移除最近一次（AI 调用失败时退次数）。
  */
 
-import { getUpstashRestConfig } from "@commercial-engine/middleware/rate-limit";
+import { getUpstashRestConfig } from "@git008/commercial-engine/middleware/rate-limit";
 
 /** 24 小时滑动窗口（题述「每日 / 24 小时内」） */
 export const TRIAL_WINDOW_MS = 24 * 60 * 60 * 1000;

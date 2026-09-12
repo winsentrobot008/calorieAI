@@ -9,7 +9,7 @@ import {
   activateSubscription as sharedActivate,
   type ActivateSubscriptionOptions,
   type SubscriptionStorePort,
-} from "@commercial-engine/middleware/billing-activate";
+} from "@git008/commercial-engine/middleware/billing-activate";
 import type { SubscriptionRecord } from "@/lib/billing-store";
 import { db } from "@/lib/db";
 

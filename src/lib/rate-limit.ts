@@ -12,7 +12,7 @@ import {
   checkRateLimit as sharedCheckRateLimit,
   clientIpFromHeaders,
   type LegacyCheckResult,
-} from "@commercial-engine/middleware/rate-limit";
+} from "@git008/commercial-engine/middleware/rate-limit";
 
 export interface RateLimitResult extends LegacyCheckResult {}
 

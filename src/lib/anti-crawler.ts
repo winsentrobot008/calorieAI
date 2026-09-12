@@ -16,7 +16,7 @@ import {
   clientIpFromHeaders,
   createInMemoryRateLimiter,
   getUpstashRestConfig,
-} from "@commercial-engine/middleware/rate-limit";
+} from "@git008/commercial-engine/middleware/rate-limit";
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
 

@@ -23,7 +23,7 @@ import {
   resolveTokenPolicy,
   visionEnforcement,
   type TokenPolicy,
-} from "@commercial-engine/middleware/llm-token-guard";
+} from "@git008/commercial-engine/middleware/llm-token-guard";
 
 /** 视觉压缩后统一输出格式（JPEG 体积更小、Gemini 全平台可解码） */
 const VISION_JPEG_QUALITY = 72;

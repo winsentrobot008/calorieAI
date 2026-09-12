@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCreditPack, resolvePack, type CreditPack } from "@/lib/credit-packs";
 import { getLocalizedPaymentItem } from "@/lib/stripe-i18n";
-import { isPlaceholderKey, resolvePaymentMethodTypes } from "@commercial-engine/middleware/payment-keys";
-import { describeStripeError } from "@commercial-engine/middleware/payment-errors";
+import { isPlaceholderKey, resolvePaymentMethodTypes } from "@git008/commercial-engine/middleware/payment-keys";
+import { describeStripeError } from "@git008/commercial-engine/middleware/payment-errors";
 
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 const STRIPE_PUBLISHABLE_KEY = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;

@@ -2,15 +2,15 @@
  * app-config — 套娃应用统一配置（Template Convergence）
  *
  * 克隆新套娃应用时，只需修改本文件 + i18n 品牌文案 + 主题配色：
- *   1. appId   → 网关注册 ID（如 "petai"）；
+ *   1. appId   → 应用标识（如 "petai"）；
  *   2. appName → 品牌名（如 "PetAI"）；
  *   3. prompts → 按应用切换的 AI Prompt（识图 / 文字分析）；
  *   4. theme   → 品牌主色（UI 高亮/按钮/图表强调色）。
- * 其余代码（网关 SDK、积分、收银、DAL、管理后台、QA）零改动即可复用。
+ * 其余代码（商业化中台、积分、收银、DAL、管理后台、QA）零改动即可复用。
  */
 
 export const APP_CONFIG = {
-  /** 网关注册 App-ID（GATEWAY_APP_TOKENS 键名，必须与网关一致） */
+  /** 应用标识（同一工厂内多 SPU 唯一，如 "calorieai"） */
   appId: "calorieai",
   /** 品牌名（用于日志 / 支付商品名 / 页面标题） */
   appName: "CalorieAI",

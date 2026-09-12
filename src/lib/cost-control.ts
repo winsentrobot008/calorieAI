@@ -13,8 +13,8 @@ import {
   createMealCreditRefund,
   createMealCreditGuard,
   type MealGuardResult,
-} from "@commercial-engine/middleware/credit-guard";
-import type { DistributedRateLimiter } from "@commercial-engine/middleware/rate-limit";
+} from "@git008/commercial-engine/middleware/credit-guard";
+import type { DistributedRateLimiter } from "@git008/commercial-engine/middleware/rate-limit";
 import { isAdminToken, isAdminUserId } from "@/lib/admin-access";
 import { createDistributedLimiter } from "@/lib/anti-crawler";
 import { db, initCreditsIfMissing } from "@/lib/db";

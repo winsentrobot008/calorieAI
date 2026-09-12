@@ -13,7 +13,7 @@
 | 🧬 套娃矩阵 | 同一套 AI/Pay/DAL/Admin 骨架克隆出 PetAI / PlantAI / FitAI 等矩阵产品 |
 | 💳 双支付流水线 | Stripe（主）+ PayPal（兜底）全链路，统一测试价 $1.00 |
 | 🗄️ 独立 DAL | Postgres / Vercel KV / 本地文件三适配器自动降级，跨实例一致 |
-| 🛰️ Central Gateway Ready | 内置网关 SDK 与环境门控接入，可无缝对接中央 API 代理网关集中管 Key |
+| 🧩 SPU 自包含 | 商业中台 `@git008/commercial-engine` 快照内联，无网关运行时依赖，可独立部署 |
 
 ---
 
@@ -30,7 +30,7 @@
 - [9. 部署与环境变量配置指南](#-9-部署与环境变量配置指南)
 - [10. API 概览](#-10-api-概览)
 - [11. 开发、构建与质检命令](#-11-开发构建与质检命令)
-- [12. 架构演进：Central Gateway 路线图](#-12-架构演进central-gateway-路线图)
+- [12. 架构演进：SPU 自包含与商业化中台](#-12-架构演进spu-自包含与商业化中台)
 - [13. 相关文档](#-13-相关文档)
 
 ---
@@ -75,18 +75,17 @@ rg -o "process\.env\.[A-Z_]+" src | sort -u
 | 4 | 本地门禁 | `npm install && npm run build`（prebuild 自动跑 `test:routes` + TypeScript） |
 | 5 | 一键上线 | Vercel → New Project → Import Git Repo；`vercel.json` 已声明 `framework: "nextjs"`，导入后 **Deploy 即可 1 分钟构建上线**；在 Dashboard 配置 Environment Variables |
 | 6 | 支付 Webhook | Stripe Dashboard 配置 Webhook → `https://你的域名/api/stripe/webhook`（事件清单见 §9.3） |
-| 7 | （可选）接中央网关 | 配置 `GATEWAY_BASE_URL + GATEWAY_APP_KEY`，识图/积分自动经中央网关（见 §12） |
 
 ---
 
 ### 2.2 1-Step App Clone 标准 SOP（10 秒挂载全套积分与收银台）
 
-克隆后只需网关注册 + 两项环境变量，即获得全套跨端积分与统一收银台（**One-Time Checkout，无订阅**）：
+克隆后无需任何网关配置，全套积分账本与收银台（**One-Time Checkout，无订阅**）随模版内联即可用：
 
-1. **网关注册**：在 `GATEWAY_APP_TOKENS` 追加一行 `"petai":"tok_petai_xxx"`（约 10 秒）；
-2. **客户端配置**：`.env.local` 写入 `GATEWAY_BASE_URL` + `GATEWAY_APP_TOKEN` 两项；
-3. **自动挂载**：`gateway-client.ts` SDK 即接管跨端积分（`credits`）、统一收银（`billing/checkout`）与统一识图（`ai/vision`）；
-4. **集中改价**：后续积分包/价格调整只在网关改一处，50+ 套娃应用秒级同步，无需逐仓发版。
+1. **积分账本**：`src/lib/db` 以端口方式注入 `@git008/commercial-engine/middleware/credits`，账号 / 积分 / 流水自动落库；
+2. **收银台**：Stripe One-Time Checkout + PayPal 全链路，商品名与价格统一由 `credit-packs.ts` + `stripe-i18n.ts` 产出；
+3. **限流与成本守卫**：`rate-limit` / `credit-guard` / `llm-token-guard` 在本仓路由层直接生效；
+4. **集中升级**：权威实现位于 `projects/commercial-engine`，升级后同步各 SPU 内联快照即可，无需重写业务逻辑。
 
 ---
 
@@ -219,7 +218,7 @@ Stripe Checkout 真实收款，支持：
 | **AI 模型** | DeepSeek 主调（`deepseek-chat`，OpenAI 兼容 chat/completions）；识图失败时可选 Gemini Vision 兜底 |
 | **TTS 语音** | Edge-TTS (Azure Cognitive Services) |
 | **持久化 (DAL)** | Postgres / Vercel KV (Redis) / 本地文件 三机制自动降级 |
-| **中央网关** | [`projects/central-gateway`](../../projects/central-gateway/README.md) SDK 接入示例（`src/lib/gateway-client.ts`） |
+| **商业化中台** | [`projects/commercial-engine`](../../projects/commercial-engine/README.md) 权威实现（`@git008/commercial-engine`，SPU 内联快照） |
 | **部署与域名** | Vercel (Git 自动部署) + Cloudflare Wildcard DNS (`*.app008ai.com`) |
 
 ---
@@ -245,7 +244,6 @@ src/
 ├── components/                          # theme-provider / locale-init / locale-switcher
 └── lib/
     ├── db/                              # ⭐ DAL 抽象层（index/types + adapters/{file,kv,postgres}）
-    ├── gateway-client.ts                # ⭐ Central Gateway SDK（vision/checkout/credits）
     ├── billing-store.ts                 # 支付流水/授权（终身买断卡、旧订阅兼容）持久化
     ├── credits-store.ts                 # 积分本地文件回退实现
     ├── analytics-store.ts               # 访问统计
@@ -302,8 +300,6 @@ npm run dev
 | 13 | `KV_REST_API_URL` / `VERCEL_KV_REST_API_URL` / `UPSTASH_REDIS_REST_URL` | 可选 | KV REST 地址 |
 | 14 | `KV_REST_API_TOKEN` / `VERCEL_KV_REST_API_TOKEN` / `UPSTASH_REDIS_REST_TOKEN` | 可选 | KV REST Token |
 | 15 | `REDIS_URL` | 可选 | 标准 Redis 连接串（预留直连适配） |
-| 16 | `GATEWAY_BASE_URL` / `GATEWAY_APP_KEY` | 可选 | Central Gateway 接入（服务端：识图/积分经统一网关） |
-| 17 | `NEXT_PUBLIC_GATEWAY_BASE_URL` / `NEXT_PUBLIC_GATEWAY_APP_KEY` | 可选 | 同上（前端直调网关时） |
 | 18 | `NEXT_PUBLIC_APP_URL` | 可选 | 前端站点绝对地址（Webhook/回调与链接生成） |
 | 19 | `TTS_SUBSCRIPTION_KEY` | 可选 | Azure Edge-TTS 密钥 |
 | 20 | `VITE_GOOGLE_CLIENT_ID` | 可选 | Google OAuth Client ID |
@@ -376,7 +372,6 @@ node scripts/test-stripe-e2e.mjs       # 支付全链路 E2E
 | **每日频控** | 单 IP **30 次/日**（滑动窗口 24h）+ 每分钟 6 次双闸门；**叠加测试期限额：普通用户 3 次/24h（429 + `TRIAL_DAILY_LIMIT`），管理员不限**；超限返回 `DAILY_RATE_LIMITED` / `RATE_LIMITED` | [`src/lib/anti-crawler.ts`](src/lib/anti-crawler.ts) + [`src/lib/trial-quota.ts`](src/lib/trial-quota.ts) + [`src/lib/cost-control.ts`](src/lib/cost-control.ts) |
 | **服务端体积兜底** | 后端拒绝 >200KB 的图片（`IMAGE_TOO_LARGE`），防绕过客户端压缩 | analyze-image 路由 |
 
-> ⚠️ 网关路径（配置 `GATEWAY_BASE_URL` 后识图优先走 Central Gateway）：请求参数与 Prompt 由网关侧控制，本仓库 `app-config.ts` 的 Prompt 需与网关 PROMPTS 表保持同步；客户端压缩与每日频控在本仓库路由层仍然生效。
 
 ### 运维后台（需管理员令牌）
 
@@ -445,7 +440,7 @@ python scripts/ceo_visual_demo.py --url http://127.0.0.1:3100
 
 ---
 
-## 🛰️ 12. 架构演进：Central Gateway 路线图
+## 🛰️ 12. 架构演进：SPU 自包含与商业化中台
 
 ### 12.1 现状（已就绪）
 
@@ -458,9 +453,9 @@ python scripts/ceo_visual_demo.py --url http://127.0.0.1:3100
 | **服务端权威积分** | `/api/v1/user/credits` 统一读写，跨设备一致 |
 | **WAF 反爬** | analyze-image 单 IP 限频 + Bot UA 拦截 |
 
-### 12.2 下一步：对接 Central Gateway（密钥集中化管理）
+### 12.2 可选：对接 Central Gateway（密钥集中托管）
 
-仓库已内置 [`projects/central-gateway`](../../projects/central-gateway/README.md)（Hono + Node 轻量网关），用于**多项目密钥集中托管与统一端点**：
+如需**多项目密钥集中托管**，可选用同仓的 [`projects/central-gateway`](../../projects/central-gateway/README.md)（Hono + Node 轻量网关）。**CalorieAI 本仓默认不接入**，积分与收银台全部本地自洽：
 
 | 统一端点 | 说明 |
 |----------|------|
@@ -470,14 +465,14 @@ python scripts/ceo_visual_demo.py --url http://127.0.0.1:3100
 
 安全层：**App-Key / Bearer 鉴权 + CORS 白名单 + 滑动窗口限频**；上游密钥只存在于网关，套娃前端零 Key。
 
-本项目已内置 [SDK 接入示例](src/lib/gateway-client.ts) 与 `GATEWAY_BASE_URL / GATEWAY_APP_KEY` 环境门控：配置后识图与积分**优先经中央网关**，网关不可用时**自动回退直连**，旧业务零影响。
+本项目已移除网关 SDK 与环境门控：识图、积分、收银台全部由本仓 `@git008/commercial-engine` 内联快照直接执行，SPU 可独立构建与部署，无跨仓运行时依赖。
 
 ### 12.3 演进阶段
 
 | 阶段 | 内容 | 状态 |
 |------|------|:---:|
 | **Phase 1** | 单应用 DAL + 双支付 + 服务端权威积分（本仓库） | ✅ 已就绪 |
-| **Phase 2** | 对接 Central Gateway：密钥集中、统一 vision/checkout/credits 端点 | 🚧 已具备 SDK 与环境门控，配置 `GATEWAY_*` 即可启用 |
+| **Phase 2** | SPU 自包含：商业化中台内联快照 + 无网关运行时依赖 | ✅ 已完成（识图 / 积分 / 收银台全本地） |
 | **Phase 3** | 多项目矩阵：PetAI / PlantAI 克隆后共享网关、积分与运维看板 | 📋 路线图 |
 
 ---

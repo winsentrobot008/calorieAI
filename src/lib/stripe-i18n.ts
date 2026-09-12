@@ -12,4 +12,4 @@ export {
   isZhLang,
   type LocalizedPaymentItem,
   type StripePlanId,
-} from "@commercial-engine/middleware/stripe-i18n";
+} from "@git008/commercial-engine/middleware/stripe-i18n";

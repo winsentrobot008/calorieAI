@@ -11,4 +11,4 @@ export {
   getCreditPack,
   resolvePack,
   type CreditPack,
-} from "@commercial-engine/middleware/credit-packs";
+} from "@git008/commercial-engine/middleware/credit-packs";

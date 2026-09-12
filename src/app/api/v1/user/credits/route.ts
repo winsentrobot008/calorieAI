@@ -1,15 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { db, addServerCredits } from "@/lib/db";
-import { createGatewayClient } from "@/lib/gateway-client";
 import { getAdminAuth } from "@/lib/admin-auth";
-
-// 中央网关接入（可选）：配置 GATEWAY_BASE_URL + GATEWAY_APP_KEY 时，积分经跨端网关统一管理
-const gateway = createGatewayClient({
-  baseUrl: process.env.GATEWAY_BASE_URL || "",
-  appId: "calorieai",
-  appKey: process.env.GATEWAY_APP_KEY || "",
-});
 
 /**
  * GET /api/v1/user/credits?user_id=xxx
@@ -22,21 +14,6 @@ const gateway = createGatewayClient({
  */
 export async function GET(request: NextRequest) {
   const userId = new URL(request.url).searchParams.get("user_id") || "anonymous";
-  if (gateway.isConfigured()) {
-    try {
-      const g = await gateway.getCredits(userId);
-      return NextResponse.json({
-        credits: g.credits,
-        is_pro: g.is_pro,
-        status: g.is_pro ? "pro" : "free",
-        has_active_subscription: !!g.is_pro,
-        user_id: userId,
-        via: "gateway",
-      });
-    } catch (err: any) {
-      console.warn("[Credits] 网关查询失败，回退本地:", err.message);
-    }
-  }
   const credits = (await db.getCredits(userId)) ?? 0;
   const sub = await db.getSubscription(userId);
   const isPro = !!sub?.is_active;
@@ -85,22 +62,6 @@ export async function POST(request: NextRequest) {
         { error: "ACCOUNT_NOT_FOUND", detail: "账号不存在或尚未登录" },
         { status: 404 }
       );
-    }
-
-    if (gateway.isConfigured()) {
-      try {
-        const g = await gateway.updateCredits({ user_id: userId, delta });
-        return NextResponse.json({
-          credits: g.credits,
-          is_pro: g.is_pro,
-          status: g.is_pro ? "pro" : "free",
-          has_active_subscription: !!g.is_pro,
-          user_id: userId,
-          via: "gateway",
-        });
-      } catch (err: any) {
-        console.warn("[Credits] 网关写入失败，回退本地:", err.message);
-      }
     }
 
     const credits = await addServerCredits(userId, delta);

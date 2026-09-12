@@ -13,7 +13,7 @@ import type { DbAdapter, PaymentStats, VisionStats, VisitStats } from "./types";
 import { fileAdapter } from "./adapters/file";
 import { kvAdapter } from "./adapters/kv";
 import { postgresAdapter } from "./adapters/postgres";
-import { createCreditLedger } from "@commercial-engine/middleware/credits";
+import { createCreditLedger } from "@git008/commercial-engine/middleware/credits";
 
 function pickAdapter(): DbAdapter {
   const pgUrl = process.env.POSTGRES_URL || process.env.DATABASE_URL;

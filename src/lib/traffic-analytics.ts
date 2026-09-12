@@ -14,7 +14,7 @@
  * 打点失败绝不抛错：统计属于旁路观测，不能影响 AI 识别主流程。
  */
 
-import { getUpstashRestConfig } from "@commercial-engine/middleware/rate-limit";
+import { getUpstashRestConfig } from "@git008/commercial-engine/middleware/rate-limit";
 
 export type TrafficEventType = "text" | "image" | "blocked" | "visit";
 

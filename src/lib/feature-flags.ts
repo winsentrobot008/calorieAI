@@ -10,7 +10,7 @@
  * 不能因为开关存储不可用而拖垮 AI 识别主流程。
  */
 
-import { getUpstashRestConfig } from "@commercial-engine/middleware/rate-limit";
+import { getUpstashRestConfig } from "@git008/commercial-engine/middleware/rate-limit";
 
 /** 功能开关键名（Redis 中统一存放在 calorieai:feature-flags 哈希） */
 export const FEATURE_VISION_ENABLED = "FEATURE_VISION_ENABLED";
